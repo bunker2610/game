@@ -7,11 +7,16 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+let currentFilename: string;
+if (typeof __filename !== "undefined") {
+  currentFilename = __filename;
+} else {
+  currentFilename = fileURLToPath(import.meta.url);
+}
+const currentDirname = typeof __dirname !== "undefined" ? __dirname : path.dirname(currentFilename);
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: "10mb" }));
 
