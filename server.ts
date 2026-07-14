@@ -1,9 +1,10 @@
-import express, { Request, Response } from "express";
+import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
+import { createServer } from "http";
+import { WebSocketServer, WebSocket } from "ws";
 import dotenv from "dotenv";
-import { GoogleGenAI, Type } from "@google/genai";
+import { createServer as createViteServer } from "vite";
 
 dotenv.config();
 
@@ -16,315 +17,209 @@ if (typeof __filename !== "undefined") {
 const currentDirname = typeof __dirname !== "undefined" ? __dirname : path.dirname(currentFilename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT || "3000", 10);
 
 app.use(express.json({ limit: "10mb" }));
 
-// Initialize Google GenAI on the server
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build",
-    },
-  },
+// Clean health check endpoint
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", game: "SUP Surfer STANDALONE", ws_connections: players.size });
 });
 
-// API endpoint to generate the next adventure step
-app.post("/api/adventure/step", async (req: Request, res: Response): Promise<void> => {
-  try {
-    const {
-      premise,
-      character,
-      inventory,
-      currentQuest,
-      storyHistory,
-      choiceMade,
-      stats,
-    } = req.body;
+// Multiplayer State
+interface Player {
+  id: string;
+  name: string;
+  skinEmoji: string;
+  skinColor: string;
+  meters: number;
+  isDead: boolean;
+  hasShield: boolean;
+  isSpeedBoosted: boolean;
+  xPos: number; // current x coordinate on the track (percentage or absolute)
+}
 
-    const historyPrompt = storyHistory && storyHistory.length > 0
-      ? storyHistory.map((h: any, index: number) => `Шаг ${index + 1}:
-История: ${h.storyText}
-Выбор игрока: ${h.choiceMade}`).join("\n\n")
-      : "История только начинается.";
+const players = new Map<string, Player>();
+let lobbyState: "lobby" | "countdown" | "playing" = "lobby";
+let countdownVal = 5;
+let countdownTimer: NodeJS.Timeout | null = null;
 
-    const systemInstruction = `Вы — ведущий бесконечной текстовой ролевой игры (Game Master) на русском языке.
-Игрок находится в мире с завязкой: "${premise}".
-Герой: ${character.name}, Класс: ${character.class}, Описание внешности: ${character.description}.
-Текущий инвентарь: ${JSON.stringify(inventory)}.
-Текущий квест: "${currentQuest}".
-Текущие показатели игрока: Здоровье: ${stats?.health || 100}/${stats?.maxHealth || 100}, Золото: ${stats?.gold || 0}.
-
-Ваша задача — продолжить историю на основе сделанного выбора игрока: "${choiceMade}".
-Создайте захватывающее, неожиданное продолжение, которое логически вытекает из его действия. Выборы игрока ДОЛЖНЫ по-настоящему влиять на сюжет, а не вести по шаблонам!
-Вам необходимо обновить статус квеста (начать новый, продвинуть текущий или завершить его) и при необходимости добавить/удалить вещи из инвентаря (например, если игрок нашел меч или выпил зелье). Также вы можете изменять здоровье или золото героя в зависимости от происходящего.
-
-Ответьте СТРОГО в формате JSON, соответствующем схеме.`;
-
-    const promptText = `История до этого момента:\n${historyPrompt}\n\nПоследнее действие игрока: "${choiceMade}"`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite", // Low-latency response model as requested
-      contents: promptText,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            storyText: {
-              type: Type.STRING,
-              description: "Продолжение истории на русском языке (1-2 абзаца). Опишите яркие детали, звуки и последствия действия.",
-            },
-            choices: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "3-4 интересных, логичных и разнообразных вариантов действий для игрока на русском языке.",
-            },
-            inventoryAdded: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Массив новых предметов, добавленных в инвентарь (на русском языке), или пустой массив.",
-            },
-            inventoryRemoved: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Массив предметов, которые игрок потерял или потратил из инвентаря (на русском языке), или пустой массив.",
-            },
-            questText: {
-              type: Type.STRING,
-              description: "Текущая формулировка квеста (на русском языке). Если квест завершен, сформулируйте новый или оставьте пустым.",
-            },
-            questStatus: {
-              type: Type.STRING,
-              enum: ["started", "updated", "completed", "none"],
-              description: "Текущий статус квеста относительно предыдущего.",
-            },
-            imagePrompt: {
-              type: Type.STRING,
-              description: "A detailed visual description in English of the active scene for image generation. Describe the subject, composition, background scenery, colors, lighting, and mood. Avoid generic style buzzwords (e.g., do not say 'photorealistic' or 'beautiful'), just describe what is seen. Describe the protagonist matching: " + character.description,
-            },
-            healthChange: {
-              type: Type.INTEGER,
-              description: "Изменение здоровья игрока (например, -10 за ранение, +15 за лечебное зелье, 0 если нет изменений).",
-            },
-            goldChange: {
-              type: Type.INTEGER,
-              description: "Изменение золота игрока (например, +25 за найденный кошель, -5 за покупку, 0 если нет изменений).",
-            },
-          },
-          required: [
-            "storyText",
-            "choices",
-            "inventoryAdded",
-            "inventoryRemoved",
-            "questText",
-            "questStatus",
-            "imagePrompt",
-            "healthChange",
-            "goldChange",
-          ],
-        },
-      },
-    });
-
-    const parsedResponse = JSON.parse(response.text || "{}");
-    res.json(parsedResponse);
-  } catch (error: any) {
-    console.error("Error generating adventure step:", error);
-    res.status(500).json({ error: error.message || "Ошибка генерации шага истории" });
-  }
-});
-
-// API endpoint to generate the character and starting premise
-app.post("/api/adventure/init", async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { premise, artStyle, characterClass, characterName } = req.body;
-
-    const systemInstruction = `Вы — создатель текстовой ролевой игры на русском языке.
-Игрок хочет начать игру со следующими параметрами:
-- Завязка/Тема: ${premise}
-- Имя персонажа: ${characterName}
-- Класс: ${characterClass}
-- Визуальный стиль: ${artStyle}
-
-Сгенерируйте вводную часть игры. 
-Также составьте подробное английское описание внешности главного героя (characterDescription) для генератора изображений. Описание должно быть в стиле фэнтези, фантастики или реализма (в зависимости от завязки), детальным и описывать лицо, одежду и ключевые атрибуты, чтобы мы могли использовать его для стабильного отображения героя.
-Сформулируйте первый квест и стартовый инвентарь персонажа.
-
-Ответьте СТРОГО в формате JSON, соответствующем схеме.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite", // Low-latency response model as requested
-      contents: "Начните приключение!",
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            storyText: {
-              type: Type.STRING,
-              description: "Вводный художественный текст начала приключения на русском языке (1-2 абзаца).",
-            },
-            choices: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "3-4 начальных варианта действий на русском языке.",
-            },
-            characterDescription: {
-              type: Type.STRING,
-              description: "A detailed physical appearance description of the protagonist in English (e.g. 'A rugged warrior with short black hair, green eyes, wearing scuffed leather armor, holding a iron shield'). This description will be reused for all image prompts to keep style and look consistent.",
-            },
-            startingInventory: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "2-3 начальных предмета в инвентаре, подходящие под класс героя.",
-            },
-            startingQuest: {
-              type: Type.STRING,
-              description: "Начальный квест (на русском языке), например, 'Выбраться из темницы' или 'Найти таинственного нанимателя'.",
-            },
-            imagePrompt: {
-              type: Type.STRING,
-              description: "A detailed visual description in English of the starting scene. Focus on environment, character position, lighting, and mood.",
-            },
-          },
-          required: [
-            "storyText",
-            "choices",
-            "characterDescription",
-            "startingInventory",
-            "startingQuest",
-            "imagePrompt",
-          ],
-        },
-      },
-    });
-
-    const parsedResponse = JSON.parse(response.text || "{}");
-    res.json(parsedResponse);
-  } catch (error: any) {
-    console.error("Error initializing adventure:", error);
-    res.status(500).json({ error: error.message || "Ошибка инициализации игры" });
-  }
-});
-
-// API endpoint to generate illustrations
-app.post("/api/adventure/image", async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { imagePrompt, artStyle, imageSize } = req.body;
-
-    // Define visual style suffix based on selected art style to guarantee visual consistency
-    let styleSuffix = "";
-    switch (artStyle) {
-      case "watercolor":
-        styleSuffix = ", epic fantasy watercolor illustration, soft pastels, detailed pencil outlines, mystical light";
-        break;
-      case "cyberpunk":
-        styleSuffix = ", high-tech cyberpunk digital art, vivid neon glow, rain-slicked futuristic streets, atmospheric synthwave aesthetics, highly detailed";
-        break;
-      case "gothic":
-        styleSuffix = ", dark gothic oil painting style, dramatic chiaroscuro lighting, deep shadows, moody romanticism, rich texture";
-        break;
-      case "comic":
-        styleSuffix = ", retro hand-drawn ink and color-washed comic book sketch, bold outlines, vintage halftone coloring, dramatic action framing";
-        break;
-      case "pixel":
-        styleSuffix = ", 16-bit retro pixel art game style, vibrant colors, detailed pixel patterns, nostalgic arcade console visual";
-        break;
-      default:
-        styleSuffix = ", digital illustration, clean composition, vibrant colors";
+// Helper to broadcast to all connected WebSocket clients
+function broadcast(data: any) {
+  const message = JSON.stringify(data);
+  players.forEach((_, id) => {
+    const ws = clientSockets.get(id);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(message);
     }
+  });
+}
 
-    const fullPrompt = `${imagePrompt}${styleSuffix}. Consistent character representation and clear environmental storytelling.`;
+// Map of socket ID to WebSocket connection instance
+const clientSockets = new Map<string, WebSocket>();
 
-    console.log(`Generating image for prompt: "${fullPrompt}" with size: "${imageSize || "1K"}"`);
+// Initialize HTTP server and mount WS server
+const httpServer = createServer(app);
+const wss = new WebSocketServer({ server: httpServer });
 
-    // Using gemini-3-pro-image-preview as requested
-    const response = await ai.models.generateContent({
-      model: "gemini-3-pro-image-preview",
-      contents: {
-        parts: [
-          {
-            text: fullPrompt,
-          },
-        ],
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: "1:1",
-          imageSize: imageSize || "1K", // Provide 1K, 2K, 4K affordance
-        },
-      },
-    });
-
-    let b64Data = "";
-    if (response.candidates && response.candidates[0]?.content?.parts) {
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData) {
-          b64Data = part.inlineData.data;
+wss.on("connection", (ws) => {
+  const socketId = "player_" + Math.random().toString(36).substring(2, 9);
+  
+  ws.on("message", (rawMessage) => {
+    try {
+      const data = JSON.parse(rawMessage.toString());
+      
+      switch (data.type) {
+        case "join": {
+          // Add player to session
+          const newPlayer: Player = {
+            id: socketId,
+            name: data.name || "Сёрфер",
+            skinEmoji: data.skinEmoji || "🏄",
+            skinColor: data.skinColor || "#915eff",
+            meters: 0,
+            isDead: false,
+            hasShield: false,
+            isSpeedBoosted: false,
+            xPos: 240, // standard default center x
+          };
+          
+          players.set(socketId, newPlayer);
+          clientSockets.set(socketId, ws);
+          
+          // Send back welcome package with player's assigned ID and current state
+          ws.send(JSON.stringify({
+            type: "welcome",
+            id: socketId,
+            lobbyState,
+            countdownVal
+          }));
+          
+          // Broadcast updated player list
+          broadcast({
+            type: "lobby_update",
+            players: Array.from(players.values()),
+            lobbyState
+          });
+          break;
+        }
+        
+        case "start_countdown": {
+          // Only the Host (first player in the map keys) can start the countdown
+          const playerIds = Array.from(players.keys());
+          if (playerIds[0] === socketId && lobbyState === "lobby") {
+            lobbyState = "countdown";
+            countdownVal = 5;
+            
+            // Send countdown update
+            broadcast({
+              type: "countdown_start",
+              value: countdownVal
+            });
+            
+            if (countdownTimer) clearInterval(countdownTimer);
+            countdownTimer = setInterval(() => {
+              countdownVal--;
+              if (countdownVal <= 0) {
+                if (countdownTimer) clearInterval(countdownTimer);
+                countdownTimer = null;
+                lobbyState = "playing";
+                
+                // Reset everyone's playing stats before the start of the race
+                players.forEach((p) => {
+                  p.meters = 0;
+                  p.isDead = false;
+                  p.hasShield = false;
+                  p.isSpeedBoosted = false;
+                });
+                
+                broadcast({
+                  type: "game_start",
+                  players: Array.from(players.values())
+                });
+              } else {
+                broadcast({
+                  type: "countdown_tick",
+                  value: countdownVal
+                });
+              }
+            }, 1000);
+          }
+          break;
+        }
+        
+        case "game_update": {
+          // Update client's metrics in real-time during race
+          const p = players.get(socketId);
+          if (p) {
+            p.meters = data.meters ?? p.meters;
+            p.isDead = data.isDead ?? p.isDead;
+            p.hasShield = data.hasShield ?? p.hasShield;
+            p.isSpeedBoosted = data.isSpeedBoosted ?? p.isSpeedBoosted;
+            p.xPos = data.xPos ?? p.xPos;
+            
+            // Broadcast the state update to all players
+            broadcast({
+              type: "player_updated",
+              player: p
+            });
+          }
+          break;
+        }
+        
+        case "return_to_lobby": {
+          // Host or any active player can reset the game back to the lobby
+          if (lobbyState === "playing") {
+            lobbyState = "lobby";
+            if (countdownTimer) {
+              clearInterval(countdownTimer);
+              countdownTimer = null;
+            }
+            
+            // Reset distances
+            players.forEach((p) => {
+              p.meters = 0;
+              p.isDead = false;
+              p.hasShield = false;
+              p.isSpeedBoosted = false;
+            });
+            
+            broadcast({
+              type: "lobby_reset",
+              players: Array.from(players.values())
+            });
+          }
           break;
         }
       }
+    } catch (e) {
+      console.error("Error processing WS message:", e);
     }
-
-    if (!b64Data) {
-      throw new Error("No image data found in Gemini response");
-    }
-
-    res.json({ imageUrl: `data:image/png;base64,${b64Data}` });
-  } catch (error: any) {
-    console.error("Error generating image:", error);
-    res.status(500).json({ error: error.message || "Ошибка генерации иллюстрации" });
-  }
-});
-
-// API endpoint for companion chatbot
-app.post("/api/companion/chat", async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { messages, gameState } = req.body;
-
-    const chatHistory = messages && messages.length > 0
-      ? messages.map((m: any) => `${m.sender === "user" ? "Игрок" : "Спутник"}: ${m.text}`).join("\n")
-      : "История диалога пуста.";
-
-    const systemInstruction = `Вы — Лира, остроумная, веселая и преданная фея-спутница, сопровождающая игрока в его текстовом приключении.
-Ваша задача — общаться с игроком в чате. Отвечайте всегда в образе (умная, заботливая, иногда поддразнивающая фея), пишите исключительно по-русски.
-Используйте детали текущей игровой ситуации, чтобы ваши ответы были максимально живыми и контекстными.
-
-Текущая игровая ситуация:
-- Мир: "${gameState.premise}"
-- Имя героя: ${gameState.character.name}, Класс: ${gameState.character.class}
-- Текущий квест: "${gameState.currentQuest || "Нет активного квеста"}"
-- Инвентарь: ${gameState.inventory.join(", ") || "Пусто"}
-- Здоровье: ${gameState.stats.health}/${gameState.stats.maxHealth}, Золото: ${gameState.stats.gold}
-- Текущая сцена в истории: "${gameState.currentStoryText}"
-
-Важные правила:
-1. Будьте эмоциональной и живой. Пишите относительно коротко (2-4 предложения).
-2. Вы можете давать легкие подсказки к загадкам или советовать, какой предмет из инвентаря применить.
-3. Относитесь к герою тепло, но с юмором. Регулярно упоминайте вещи из его инвентаря или текущий квест.
-4. Отвечайте только обычным текстом, без разметки markdown или кодов.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash", // Use general flash model for conversation
-      contents: `История предыдущего диалога:\n${chatHistory}\n\nНовое сообщение от Игрока: "${messages[messages.length - 1]?.text}"\nЛира:`,
-      config: {
-        systemInstruction,
-        temperature: 0.8,
-      },
+  });
+  
+  ws.on("close", () => {
+    players.delete(socketId);
+    clientSockets.delete(socketId);
+    
+    // Broadcast player left
+    broadcast({
+      type: "lobby_update",
+      players: Array.from(players.values()),
+      lobbyState
     });
-
-    res.json({ text: response.text || "Я задумалась, мой друг. Что ты сказал?" });
-  } catch (error: any) {
-    console.error("Error in companion chat:", error);
-    res.status(500).json({ error: error.message || "Ошибка чата со спутником" });
-  }
+    
+    // If no players are left, reset the state completely
+    if (players.size === 0) {
+      lobbyState = "lobby";
+      if (countdownTimer) {
+        clearInterval(countdownTimer);
+        countdownTimer = null;
+      }
+    }
+  });
 });
 
-// Integrate Vite middleware for development
+// Integrate Vite middleware or serve static bundle
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -340,8 +235,9 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  // Use httpServer instead of app.listen to support both Express and WebSockets on port 3000
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
   });
 }
 

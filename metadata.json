@@ -1,6 +1,6 @@
 {
-  "name": "Infinite Choose Your Own Adventure Engine",
-  "description": "An infinite, AI-powered choose-your-own-adventure game with real-time story generation, dynamic quest/inventory tracking, and consistent real-time illustration generation.",
+  "name": "SUP Surfer Game",
+  "description": "Полнофункциональная аркадная мини-игра про SUP-сёрфинг на Twitch-реке: собирайте SupPoints, покупайте скины в магазине и уворачивайтесь от препятствий!",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
