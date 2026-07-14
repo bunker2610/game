@@ -1,5 +1,5 @@
 {
-  "name": "SUP Surfer Game",
+  "name": "SUP_game",
   "description": "Полнофункциональная аркадная мини-игра про SUP-сёрфинг на Twitch-реке: собирайте SupPoints, покупайте скины в магазине и уворачивайтесь от препятствий!",
   "requestFramePermissions": [],
   "majorCapabilities": [

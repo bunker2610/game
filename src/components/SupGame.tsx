@@ -260,7 +260,8 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
     return parseInt(localStorage.getItem("sup_coins") || "0", 10);
   });
   const [lives, setLives] = useState(3);
-  const [hasShield, setHasShield] = useState(false);
+  const [shieldCount, setShieldCount] = useState(0);
+  const hasShield = shieldCount > 0;
   const [shieldAnimActive, setShieldAnimActive] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [currentSkin, setCurrentSkin] = useState<Skin>(SKINS[0]);
@@ -651,7 +652,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
 
     setLives(3);
     setScore(0);
-    setHasShield(false);
+    setShieldCount(0);
     setIsPlaying(true);
     setActiveScare(null);
     setIsGlitchedReact(false);
@@ -701,8 +702,8 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
     // Responsive Canvas Resize logic
     const updateCanvasSize = () => {
       if (containerRef.current) {
-        canvas.width = Math.min(containerRef.current.clientWidth, 480);
-        canvas.height = 500;
+        canvas.width = Math.min(containerRef.current.clientWidth, 720);
+        canvas.height = 600;
         stateRef.current.playerX = canvas.width / 2;
         stateRef.current.targetPlayerX = canvas.width / 2;
         stateRef.current.playerY = canvas.height - 110;
@@ -789,16 +790,43 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         }
       }
 
-      // Background Speed up based on current level and progressive meters within level
-      const levelSpeeds: { [key: number]: number } = {
-        1: 1.8,
-        2: 2.2,
-        3: 2.6,
-        4: 3.1,
-        5: 3.8
-      };
-      const baseLevelSpeed = levelSpeeds[newLevel] || 1.8;
-      state.gameSpeed = baseLevelSpeed + ((currentMeters % 100) / 450);
+      // Background Speed up - smoothly and gradually increases to the end of the level,
+      // and starts from the initial speed (1.8) on each new level.
+      // Higher levels have higher end speeds and take longer to traverse (more meters).
+      let levelStartMeters = 0;
+      let levelEndMeters = 100;
+      let startSpeed = 1.8;
+      let endSpeed = 2.6;
+
+      if (newLevel === 1) {
+        levelStartMeters = 0;
+        levelEndMeters = 100;
+        startSpeed = 1.8;
+        endSpeed = 2.6;
+      } else if (newLevel === 2) {
+        levelStartMeters = 100;
+        levelEndMeters = 250;
+        startSpeed = 1.8;
+        endSpeed = 3.2;
+      } else if (newLevel === 3) {
+        levelStartMeters = 250;
+        levelEndMeters = 500;
+        startSpeed = 1.8;
+        endSpeed = 4.0;
+      } else if (newLevel === 4) {
+        levelStartMeters = 500;
+        levelEndMeters = 800;
+        startSpeed = 1.8;
+        endSpeed = 5.0;
+      } else {
+        levelStartMeters = 800;
+        levelEndMeters = 1200;
+        startSpeed = 1.8;
+        endSpeed = 6.2;
+      }
+
+      const levelProgress = Math.min(1.0, Math.max(0.0, (state.meters - levelStartMeters) / (levelEndMeters - levelStartMeters)));
+      state.gameSpeed = startSpeed + levelProgress * (endSpeed - startSpeed);
 
       // Spawning obstacles & bonuses
       const now = Date.now();
@@ -839,14 +867,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         });
       }
 
-      // Randomly trigger jumpscares as player travels further
-      // Limit frequency so it isn't too annoying, but still highly hilarious
-      if (currentMeters > 10 && now - state.lastScareTime > 18000) {
-        if (Math.random() < 0.08) {
-          state.lastScareTime = now;
-          triggerJumpscare();
-        }
-      }
+
 
       // Handle glitch state / reversed controls
       if (state.isGlitched) {
@@ -1077,41 +1098,43 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
           const bubbleX = f.side === "left" ? f.x + 45 : f.x - 45;
           const bubbleY = f.y - 32;
 
-          ctx.font = "bold 9px monospace";
+          ctx.font = "bold 13px sans-serif";
           const textWidth = ctx.measureText(f.phrase).width;
-          const paddingX = 8;
-          const paddingY = 5;
+          const paddingX = 12;
+          const paddingY = 8;
+          const textHeight = 16;
 
           // Draw speech bubble background
           ctx.fillStyle = "rgba(13, 7, 24, 0.95)";
           ctx.strokeStyle = "#a78bfa";
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = 1.8;
           ctx.shadowColor = "#915eff";
-          ctx.shadowBlur = 4;
+          ctx.shadowBlur = 6;
           
           ctx.beginPath();
           // Round rect
           ctx.roundRect(
             bubbleX - textWidth / 2 - paddingX,
-            bubbleY - 8 - paddingY,
+            bubbleY - textHeight / 2 - paddingY,
             textWidth + paddingX * 2,
-            16 + paddingY * 2,
-            6
+            textHeight + paddingY * 2,
+            8
           );
           ctx.fill();
           ctx.stroke();
 
-          // Small triangle connector for speech bubble
+          // Small triangle connector for speech bubble pointing to fisherman
           ctx.fillStyle = "rgba(13, 7, 24, 0.95)";
           ctx.beginPath();
+          const bubbleBottom = bubbleY + textHeight / 2 + paddingY;
           if (f.side === "left") {
-            ctx.moveTo(bubbleX - 10, bubbleY + 10);
-            ctx.lineTo(bubbleX - 18, bubbleY + 6);
-            ctx.lineTo(bubbleX - 6, bubbleY + 6);
+            ctx.moveTo(bubbleX - 8, bubbleBottom);
+            ctx.lineTo(bubbleX - 14, bubbleBottom + 6);
+            ctx.lineTo(bubbleX - 2, bubbleBottom);
           } else {
-            ctx.moveTo(bubbleX + 10, bubbleY + 10);
-            ctx.lineTo(bubbleX + 18, bubbleY + 6);
-            ctx.lineTo(bubbleX + 6, bubbleY + 6);
+            ctx.moveTo(bubbleX + 8, bubbleBottom);
+            ctx.lineTo(bubbleX + 14, bubbleBottom + 6);
+            ctx.lineTo(bubbleX + 2, bubbleBottom);
           }
           ctx.fill();
 
@@ -1287,22 +1310,17 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
             });
           } else if (obj.type === "shield") {
             audio.playShield();
-            setHasShield(true);
-            setShieldAnimActive(true);
-            // Auto-hide the center animation after 1.8s
-            setTimeout(() => {
-              setShieldAnimActive(false);
-            }, 1800);
+            setShieldCount((prev) => prev + 1);
           } else if (obj.type === "coffee") {
             audio.playShield();
             state.isSpeedBoosted = true;
             state.boostTimeLeft = 6.0; // 6 seconds nitro speed boost
           } else {
             // Collision with hazards (log, ban, duck)
-            if (hasShield) {
+            if (shieldCount > 0) {
               // Absorbed by shield
               audio.playShield();
-              setHasShield(false);
+              setShieldCount((prev) => prev - 1);
             } else {
               // Deduct life
               audio.playHit();
@@ -1459,14 +1477,42 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
       ctx.stroke();
 
       // Draw active shield bubble
-      if (hasShield) {
+      if (shieldCount > 0) {
         ctx.strokeStyle = "#10b981";
         ctx.fillStyle = "rgba(16, 185, 129, 0.15)";
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 1.5 + shieldCount * 1.5;
         ctx.beginPath();
         ctx.arc(0, 0, state.playerHeight / 2 + 10, 0, Math.PI * 2);
         ctx.stroke();
         ctx.fill();
+
+        // Draw multiple ring effects if they have 2+ shields
+        if (shieldCount >= 2) {
+          ctx.strokeStyle = "rgba(16, 185, 129, 0.4)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(0, 0, state.playerHeight / 2 + 16, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        if (shieldCount >= 3) {
+          ctx.strokeStyle = "rgba(16, 185, 129, 0.2)";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(0, 0, state.playerHeight / 2 + 22, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        // Draw shield count text over the player
+        if (shieldCount > 1) {
+          ctx.save();
+          ctx.font = "bold 11px monospace";
+          ctx.fillStyle = "#10b981";
+          ctx.shadowColor = "#000000";
+          ctx.shadowBlur = 3;
+          ctx.textAlign = "center";
+          ctx.fillText(`x${shieldCount}`, 0, -state.playerHeight / 2 - 15);
+          ctx.restore();
+        }
       }
 
       // Draw Nitro particles if boosted
@@ -1528,10 +1574,10 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
     return () => {
       cancelAnimationFrame(animationId);
     };
-  }, [isPlaying, currentSkin, hasShield, boardColor, characterColor]);
+  }, [isPlaying, currentSkin, shieldCount, boardColor, characterColor]);
 
   return (
-    <div className="relative flex flex-col lg:flex-row items-stretch justify-center gap-6 max-w-[780px] w-full mx-auto" id="sup_game_wrapper_outer">
+    <div className="relative flex flex-col lg:flex-row items-stretch justify-center gap-6 lg:gap-8 max-w-[1100px] w-full mx-auto" id="sup_game_wrapper_outer">
       {/* Lobby link side panel on desktop */}
       {gameMode === "multiplayer" && !isPlaying && (
         <div className="hidden lg:flex flex-col bg-[#0e0a1b]/95 border border-[#281b4e] rounded-2xl p-5 w-[260px] shrink-0 font-mono text-left space-y-4 shadow-2xl animate-fade-in" id="desktop_lobby_invite_panel">
@@ -1572,8 +1618,41 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         </div>
       )}
 
+      {/* Live race leaderboard sidebar on desktop */}
+      {gameMode === "multiplayer" && isPlaying && (
+        <div className="hidden lg:flex flex-col bg-[#0e0a1b]/95 border border-[#2e1d52]/80 rounded-2xl p-5 w-[260px] shrink-0 font-mono text-left space-y-4 shadow-2xl animate-fade-in" id="desktop_live_leaderboard_panel">
+          <div className="flex items-center gap-2 text-amber-400 border-b border-[#21173d] pb-2">
+            <Award className="w-5 h-5 text-amber-400" />
+            <h5 className="font-extrabold text-xs uppercase tracking-wider">Лидеры заплыва</h5>
+          </div>
+          <div className="space-y-2.5 mt-1.5">
+            {(() => {
+              const sorted: any[] = [
+                { name: playerName, meters: score, skinEmoji: currentSkin.emoji, id: myId || "me", isDead: false },
+                ...Array.from(otherPlayersRef.current.values())
+              ].sort((a: any, b: any) => b.meters - a.meters);
+
+              return sorted.map((p: any, idx: number) => (
+                <div key={p.id} className="flex items-center justify-between gap-2 text-xs border-b border-[#1b1235] pb-2 last:border-0">
+                  <span className="flex items-center gap-2 text-gray-300 truncate max-w-[160px]">
+                    <span className="font-extrabold text-gray-500 w-4">{idx + 1}</span>
+                    <span className="text-sm select-none">{p.skinEmoji}</span>
+                    <span className={p.id === myId || p.id === "me" ? "text-[#bf94ff] font-extrabold" : "text-white truncate"}>
+                      {p.name}
+                    </span>
+                  </span>
+                  <span className={`font-black ${p.isDead ? "text-red-500 line-through text-[10px]" : "text-emerald-400"}`}>
+                    {p.isDead ? "выбыл" : `${Math.floor(p.meters)}м`}
+                  </span>
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
+
       {/* Main Game Container */}
-      <div className={`relative flex flex-col bg-[#07050d] border border-[#21173c] rounded-2xl overflow-hidden max-w-[480px] w-full shadow-2xl ${isScreenShaking ? "animate-bounce" : ""}`} id="sup_game_container" ref={containerRef}>
+      <div className="relative flex flex-col bg-[#07050d] border border-[#21173c] rounded-2xl overflow-hidden max-w-[640px] w-full shadow-2xl" id="sup_game_container" ref={containerRef}>
       {/* Top Banner Jumpscare Notification */}
       <AnimatePresence>
         {activeScare && (
@@ -1618,7 +1697,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         <div className="flex items-center gap-2" id="header_title_wrapper">
           <Waves className="w-5 h-5 text-[#915eff]" />
           <h3 className="font-extrabold text-white text-sm tracking-wide font-sans uppercase">
-            SUP Сёрфинг на Твиче
+            SUP_game
           </h3>
         </div>
         
@@ -1731,9 +1810,9 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
 
           {/* Shields or Speed Indicators */}
           <div className="flex gap-1.5" id="boosts_bar">
-            {hasShield && (
-              <span className="flex items-center gap-0.5 bg-emerald-950/80 border border-emerald-500/30 px-2 py-0.5 rounded text-[9px] text-emerald-400 font-bold uppercase font-mono">
-                <Shield className="w-3 h-3" /> Щит
+            {shieldCount > 0 && (
+              <span className="flex items-center gap-1 bg-emerald-950/80 border border-emerald-500/30 px-2.5 py-0.5 rounded text-[9px] text-emerald-400 font-bold uppercase font-mono">
+                <Shield className="w-3 h-3 fill-emerald-500/30" /> Щит {shieldCount > 1 && `x${shieldCount}`}
               </span>
             )}
             {stateRef.current.isSpeedBoosted && (
@@ -1858,51 +1937,51 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                   </button>
                 </div>
 
-                <div className="space-y-3 text-xs leading-relaxed text-gray-300" id="rules_body">
+                <div className="space-y-4 text-sm leading-relaxed text-gray-300" id="rules_body">
                   {/* Levels and Milestones */}
-                  <div className="bg-[#1b1236]/90 border border-[#3b2774]/50 rounded-xl p-3 space-y-1.5">
-                    <p className="font-bold text-amber-400 flex items-center gap-1 text-[11px] uppercase tracking-wide">
-                      <Award className="w-3.5 h-3.5 text-amber-400" /> СИСТЕМА УРОВНЕЙ И НАГРАДЫ:
+                  <div className="bg-[#1b1236]/90 border border-[#3b2774]/50 rounded-xl p-3.5 space-y-2">
+                    <p className="font-bold text-amber-400 flex items-center gap-1.5 text-xs md:text-sm uppercase tracking-wide">
+                      <Award className="w-4 h-4 text-amber-400" /> СИСТЕМА УРОВНЕЙ И НАГРАДЫ:
                     </p>
-                    <p className="text-gray-400 text-[10px] leading-tight">
+                    <p className="text-gray-300 text-xs leading-tight">
                       Продвигайтесь по реке, чтобы открывать новые этапы! Каждый уровень увеличивает скорость течения и приносит жирные бонусы звёздочек:
                     </p>
-                    <ul className="space-y-1 text-[10px] text-gray-300 font-mono">
-                      <li>🥇 <strong className="text-amber-400">Ур. 2 (100м)</strong>: «Штормовой Прилив» <span className="text-emerald-400">+25 ★</span></li>
-                      <li>💎 <strong className="text-amber-400">Ур. 3 (250м)</strong>: «Кибер-Течение» <span className="text-emerald-400">+50 ★</span></li>
-                      <li>👑 <strong className="text-amber-400">Ур. 4 (500м)</strong>: «Омут Модераторов» <span className="text-emerald-400">+100 ★</span></li>
-                      <li>🌀 <strong className="text-amber-400">Ур. 5 (800м)</strong>: «Легенда Реки» <span className="text-emerald-400">+200 ★</span></li>
+                    <ul className="space-y-1.5 text-xs text-gray-200 font-mono">
+                      <li>🥇 <strong className="text-amber-400">Ур. 2 (100м)</strong>: «Штормовой Прилив» <span className="text-emerald-400 font-bold">+25 ★</span></li>
+                      <li>💎 <strong className="text-amber-400">Ур. 3 (250м)</strong>: «Кибер-Течение» <span className="text-emerald-400 font-bold">+50 ★</span></li>
+                      <li>👑 <strong className="text-amber-400">Ур. 4 (500м)</strong>: «Омут Модераторов» <span className="text-emerald-400 font-bold">+100 ★</span></li>
+                      <li>🌀 <strong className="text-amber-400">Ур. 5 (800м)</strong>: «Легенда Реки» <span className="text-emerald-400 font-bold">+200 ★</span></li>
                     </ul>
                   </div>
 
                   {/* Multiplayer Rules */}
-                  <div className="bg-[#10142b]/90 border border-[#1f2858]/50 rounded-xl p-3 space-y-1">
-                    <p className="font-bold text-[#7ea1ff] flex items-center gap-1 text-[11px] uppercase tracking-wide">
-                      <Play className="w-3.5 h-3.5 text-[#7ea1ff]" /> КОМАНДНАЯ ИГРА (Race mode):
+                  <div className="bg-[#10142b]/90 border border-[#1f2858]/50 rounded-xl p-3.5 space-y-1.5">
+                    <p className="font-bold text-[#7ea1ff] flex items-center gap-1.5 text-xs md:text-sm uppercase tracking-wide">
+                      <Play className="w-4 h-4 text-[#7ea1ff]" /> КОМАНДНАЯ ИГРА (Race mode):
                     </p>
-                    <p className="text-gray-400 text-[10px]">
-                      Соревнуйтесь с другими сёрферами в реальном времени! Правило простое: <strong>кто последний останется на воде (дольше всех выживет) — тот и выиграл заплыв!</strong> Справа выводится живая таблица лидеров заплыва.
+                    <p className="text-gray-300 text-xs">
+                      Соревнуйтесь с другими сёрферами в реальном времени! Правило простое: <strong>кто последний останется на воде (дольше всех выживет) — тот и выиграл заплыв!</strong> Снизу выводится живая таблица лидеров заплыва.
                     </p>
                   </div>
 
                   {/* Mechanics: what to pick up */}
-                  <div className="bg-[#101b15]/60 border border-emerald-900/30 rounded-xl p-3 space-y-1.5">
-                    <p className="font-bold text-emerald-400 flex items-center gap-1 text-[11px] uppercase tracking-wide">
-                      <CheckCircle className="w-3.5 h-3.5" /> Что нужно ПОДБИРАТЬ (Бонусы):
+                  <div className="bg-[#101b15]/60 border border-emerald-900/30 rounded-xl p-3.5 space-y-2">
+                    <p className="font-bold text-emerald-400 flex items-center gap-1.5 text-xs md:text-sm uppercase tracking-wide">
+                      <CheckCircle className="w-4 h-4" /> Что нужно ПОДБИРАТЬ (Бонусы):
                     </p>
-                    <ul className="space-y-1 text-[10px] text-gray-400 list-disc list-inside">
+                    <ul className="space-y-1.5 text-xs text-gray-300 list-disc list-inside">
                       <li><strong className="text-emerald-300">★ (SupPoints)</strong>: Добавляют +1 на баланс.</li>
-                      <li><strong className="text-emerald-300">🛡️ Зелёный щит (Shield)</strong>: Спасает от ОДНОГО удара препятствием. При подборе картинка щита всплывает в центр.</li>
+                      <li><strong className="text-emerald-300">🛡️ Зелёный щит (Shield)</strong>: Спасает от ОДНОГО удара препятствием.</li>
                       <li><strong className="text-emerald-300">🥤 Синяя вода (Boost)</strong>: На 5 секунд включает Nitro-ускорение (с бессмертием!).</li>
                     </ul>
                   </div>
 
                   {/* Mechanics: what to avoid */}
-                  <div className="bg-[#1c0e12]/60 border border-red-900/30 rounded-xl p-3 space-y-1.5">
-                    <p className="font-bold text-red-400 flex items-center gap-1 text-[11px] uppercase tracking-wide">
-                      <XCircle className="w-3.5 h-3.5" /> Чего нужно ИЗБЕГАТЬ (Опасность):
+                  <div className="bg-[#1c0e12]/60 border border-red-900/30 rounded-xl p-3.5 space-y-2">
+                    <p className="font-bold text-red-400 flex items-center gap-1.5 text-xs md:text-sm uppercase tracking-wide">
+                      <XCircle className="w-4 h-4" /> Чего нужно ИЗБЕГАТЬ (Опасность):
                     </p>
-                    <ul className="space-y-1 text-[10px] text-gray-400 list-disc list-inside">
+                    <ul className="space-y-1.5 text-xs text-gray-300 list-disc list-inside">
                       <li><strong className="text-red-300">🪵 Брёвна и 🦆 Уточки</strong>: Отнимают 1 жизнь. Если жизней 0 — заплыв завершён!</li>
                       <li><strong className="text-red-300">🔨 Бан-молот (Ban)</strong>: Разворачивает управление (Реверс клавиш) на 3.5 сек!</li>
                       <li><strong className="text-red-300">🚨 Водные пугалки (Jumpscares)</strong>: Резко вылетают на экран, сбивая с толку!</li>
@@ -2025,60 +2104,9 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         <div className="flex items-center justify-center bg-[#07050d] relative" id="canvas_viewport">
           <canvas 
             ref={canvasRef}
-            className="block max-w-full h-[500px]"
+            className="block max-w-full h-[600px]"
             id="game_board_canvas"
           />
-
-          {isPlaying && gameMode === "multiplayer" && (
-            isLiveLeaderboardOpen ? (
-              <div className="absolute top-3 right-3 bg-[#0d091e]/90 border border-[#2e1d52]/80 rounded-xl p-2.5 min-w-[150px] max-w-[180px] z-15 font-mono select-none shadow-[0_4px_12px_rgba(0,0,0,0.5)] animate-fade-in" id="live_race_leaderboard">
-                <div className="flex items-center justify-between border-b border-[#21153d] pb-1 mb-1">
-                  <p className="text-[9px] text-amber-400 font-extrabold uppercase tracking-wider flex items-center gap-1">
-                    <span>🏆 ЛИДЕРЫ РЕКИ:</span>
-                  </p>
-                  <button 
-                    onClick={() => setIsLiveLeaderboardOpen(false)}
-                    className="p-0.5 hover:bg-[#1a1230] rounded text-gray-400 hover:text-white transition-all text-[8px] font-bold px-1 cursor-pointer"
-                    title="Свернуть"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div className="space-y-1 mt-1.5">
-                  {(() => {
-                    const sorted: any[] = [
-                      { name: playerName, meters: score, skinEmoji: currentSkin.emoji, id: myId || "me", isDead: !isPlaying },
-                      ...Array.from(otherPlayersRef.current.values())
-                    ].sort((a: any, b: any) => b.meters - a.meters);
-
-                    return sorted.map((p: any, idx: number) => (
-                      <div key={p.id} className="flex items-center justify-between gap-2 text-[10px]">
-                        <span className="flex items-center gap-1.5 text-gray-300 truncate max-w-[100px]">
-                          <span className="font-bold text-gray-500">{idx + 1}</span>
-                          <span className="text-xs">{p.skinEmoji}</span>
-                          <span className={p.id === myId || p.id === "me" ? "text-[#bf94ff] font-bold" : "text-white"}>
-                            {p.name}
-                          </span>
-                        </span>
-                        <span className={`font-bold ${p.isDead ? "text-red-500 line-through text-[9px]" : "text-emerald-400"}`}>
-                          {p.isDead ? "выбыл" : `${Math.floor(p.meters)}м`}
-                        </span>
-                      </div>
-                    ));
-                  })()}
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => setIsLiveLeaderboardOpen(true)}
-                className="absolute bottom-3 right-3 bg-[#0d091e]/95 border border-amber-500/50 p-2 rounded-xl z-15 text-[10px] text-amber-400 shadow-lg hover:bg-[#1f163a] transition-all cursor-pointer animate-bounce flex items-center gap-1 font-mono font-bold"
-                id="live_leaderboard_expand_btn"
-                title="Развернуть таблицу лидеров"
-              >
-                <span>🏆 Показать лидеров</span>
-              </button>
-            )
-          )}
 
           {/* Level Up Celebration Popup */}
           <AnimatePresence>
@@ -2329,20 +2357,48 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                     <h4 className="text-white font-black text-base md:text-lg uppercase tracking-wider font-sans">
                       SUP-Борд Водный Чилл
                     </h4>
-                    <p className="text-gray-400 text-[11px] leading-relaxed px-1">
+                    <p className="text-gray-300 text-xs md:text-sm leading-relaxed px-1">
                       Управляйте доской, собирайте звёзды и бонусы. Остерегайтесь брёвен, банов и <strong className="text-red-400">пугалок</strong>!
                     </p>
                   </div>
 
+                  {/* Level milestones & goals card before start */}
+                  <div className="bg-[#17102e]/80 border border-[#3c256b]/50 rounded-xl p-3 space-y-2.5 text-left" id="start_screen_goals">
+                    <p className="font-extrabold text-amber-400 flex items-center gap-1 text-xs md:text-sm uppercase tracking-wide">
+                      <Award className="w-4 h-4 text-amber-400 animate-pulse" /> 🎯 Цели и уровни заплыва:
+                    </p>
+                    <p className="text-gray-300 text-xs leading-normal">
+                      Плывите вперёд, уворачиваясь от брёвен и зарабатывая бонусы на каждом этапе:
+                    </p>
+                    <div className="grid grid-cols-2 gap-2 mt-1.5 font-mono text-xs">
+                      <div className="bg-[#0b0518]/90 border border-[#2b194d] rounded-lg p-1.5 flex flex-col justify-center">
+                        <span className="text-amber-400 font-bold">🥈 Ур. 2 (100м)</span>
+                        <span className="text-[10px] text-gray-400">Шторм (+25 ★)</span>
+                      </div>
+                      <div className="bg-[#0b0518]/90 border border-[#2b194d] rounded-lg p-1.5 flex flex-col justify-center">
+                        <span className="text-[#7ea1ff] font-bold">💎 Ур. 3 (250м)</span>
+                        <span className="text-[10px] text-gray-400">Кибер (+50 ★)</span>
+                      </div>
+                      <div className="bg-[#0b0518]/90 border border-[#2b194d] rounded-lg p-1.5 flex flex-col justify-center">
+                        <span className="text-purple-400 font-bold">👑 Ур. 4 (500м)</span>
+                        <span className="text-[10px] text-gray-400">Модеры (+100 ★)</span>
+                      </div>
+                      <div className="bg-[#0b0518]/90 border border-[#2b194d] rounded-lg p-1.5 flex flex-col justify-center">
+                        <span className="text-emerald-400 font-bold">🌀 Ур. 5 (800м)</span>
+                        <span className="text-[10px] text-gray-400">Легенда (+200 ★)</span>
+                      </div>
+                    </div>
+                  </div>
+
                   {highScore > 0 && gameMode !== "multiplayer" && (
-                    <div className="flex flex-col items-center gap-1">
-                      <div className="bg-[#120a1c] border border-[#291740] rounded-xl py-1 px-2.5 inline-flex items-center gap-1 text-[11px] text-amber-400 font-bold font-mono">
-                        <Award className="w-3.5 h-3.5 text-amber-400" />
+                    <div className="flex flex-col items-center gap-1.5">
+                      <div className="bg-[#120a1c] border border-[#291740] rounded-xl py-1 px-3 inline-flex items-center gap-1.5 text-xs text-amber-400 font-bold font-mono">
+                        <Award className="w-4 h-4 text-amber-400" />
                         <span>Ваш Рекорд: {highScore} метров</span>
                       </div>
                       <button
                         onClick={() => setShowLeaderboard(true)}
-                        className="text-[9px] text-[#7ea1ff] hover:underline font-mono uppercase tracking-wide cursor-pointer"
+                        className="text-xs text-[#7ea1ff] hover:underline font-mono uppercase tracking-wide cursor-pointer"
                       >
                         🏆 Таблица рекордов
                       </button>
@@ -2350,8 +2406,8 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                   )}
 
                   {/* Player Name Input */}
-                  <div className="space-y-1 w-full bg-[#120a1c]/90 border border-[#291740] rounded-xl p-2.5 text-left">
-                    <label className="text-[9px] text-gray-400 font-bold uppercase font-mono tracking-wider flex items-center gap-1 select-none">
+                  <div className="space-y-1.5 w-full bg-[#120a1c]/90 border border-[#291740] rounded-xl p-3 text-left">
+                    <label className="text-xs text-gray-400 font-bold uppercase font-mono tracking-wider flex items-center gap-1 select-none">
                       🏄‍♂️ Имя Сёрфера:
                     </label>
                     <input
@@ -2363,15 +2419,15 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                         localStorage.setItem("sup_player_name", newName);
                       }}
                       placeholder="Введите имя..."
-                      className="w-full bg-[#0d0714]/85 text-white border border-[#482c76] rounded-lg px-2.5 py-1 text-xs font-mono focus:outline-none focus:border-[#915eff] transition-all"
+                      className="w-full bg-[#0d0714]/85 text-white border border-[#482c76] rounded-lg px-2.5 py-1.5 text-sm font-mono focus:outline-none focus:border-[#915eff] transition-all"
                       id="playerName_input"
                     />
                   </div>
 
                   {/* Customization: Board & Character Colors */}
-                  <div className="space-y-3 w-full bg-[#120a1c]/90 border border-[#291740] rounded-xl p-2.5 text-left" id="color_customizer_box">
+                  <div className="space-y-3 w-full bg-[#120a1c]/90 border border-[#291740] rounded-xl p-3 text-left" id="color_customizer_box">
                     <div className="space-y-1">
-                      <label className="text-[9px] text-gray-400 font-bold uppercase font-mono tracking-wider flex items-center gap-1.5 select-none">
+                      <label className="text-xs text-gray-300 font-bold uppercase font-mono tracking-wider flex items-center gap-1.5 select-none">
                         🎨 Цвет SUP-борда:
                       </label>
                       <div className="flex flex-wrap gap-1.5">
@@ -2399,7 +2455,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                     </div>
 
                     <div className="space-y-1 pt-1.5 border-t border-[#201538]">
-                      <label className="text-[9px] text-gray-400 font-bold uppercase font-mono tracking-wider flex items-center gap-1.5 select-none">
+                      <label className="text-xs text-gray-300 font-bold uppercase font-mono tracking-wider flex items-center gap-1.5 select-none">
                         🏄‍♂️ Цвет Человечка:
                       </label>
                       <div className="flex flex-wrap gap-1.5">
@@ -2429,21 +2485,21 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
 
                   {/* Game Mode Selector */}
                   {isLobbyJoin ? (
-                    <div className="w-full bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-2.5 text-center text-xs font-semibold text-emerald-400 select-none">
+                    <div className="w-full bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-3 text-center text-xs font-bold text-emerald-400 select-none">
                       🔒 Вы вошли по приглашению в лобби заплыва!
                     </div>
                   ) : gameMode === "solo" ? (
-                    <div className="space-y-1 w-full bg-[#120a1c]/90 border border-[#291740] rounded-xl p-2.5 text-left">
-                      <label className="text-[9px] text-gray-400 font-bold uppercase font-mono tracking-wider flex items-center gap-1 select-none">
+                    <div className="space-y-1 w-full bg-[#120a1c]/90 border border-[#291740] rounded-xl p-3 text-left">
+                      <label className="text-xs text-gray-300 font-bold uppercase font-mono tracking-wider flex items-center gap-1 select-none">
                         🎮 Режим Заплыва:
                       </label>
-                      <div className="grid grid-cols-2 gap-2 mt-1">
+                      <div className="grid grid-cols-2 gap-2 mt-1.5">
                         <button
                           onClick={() => {
                             setGameMode("solo");
                             disconnectWebSocket();
                           }}
-                          className={`py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border ${
+                          className={`py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border ${
                             gameMode === "solo"
                               ? "bg-[#915eff] text-white border-[#915eff] shadow-[0_2px_8px_rgba(145,94,255,0.3)]"
                               : "bg-[#0d0714] text-gray-400 border-[#2a1745] hover:text-white"
@@ -2457,7 +2513,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                             setGameMode("multiplayer");
                             connectWebSocket();
                           }}
-                          className={`py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border ${
+                          className={`py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer border ${
                             gameMode === "multiplayer"
                               ? "bg-[#10b981] text-white border-[#10b981] shadow-[0_2px_8px_rgba(16,185,129,0.3)]"
                               : "bg-[#0d0714] text-gray-400 border-[#2a1745] hover:text-white"
@@ -2474,9 +2530,20 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                   {gameMode === "multiplayer" ? (
                     <div className="w-full bg-[#0e0a1b] border border-[#271d47] rounded-xl p-3 space-y-2 text-left" id="multiplayer_lobby_panel">
                       {!wsConnected ? (
-                        <div className="py-4 text-center space-y-2">
+                        <div className="py-5 text-center space-y-3">
                           <div className="w-5 h-5 border-2 border-[#10b981] border-t-transparent rounded-full animate-spin mx-auto" />
                           <p className="text-xs text-gray-400 font-mono">Подключение к реке заплывов... 🌊</p>
+                          <button
+                            onClick={() => {
+                              setGameMode("solo");
+                              disconnectWebSocket();
+                              audio.playHit();
+                            }}
+                            className="px-4 py-1.5 bg-[#251d3a] hover:bg-[#342751] text-[#bf94ff] border border-[#4d3283] text-xs font-bold rounded-xl transition-all cursor-pointer inline-flex items-center gap-1 mt-1"
+                            id="lobby_cancel_connection_btn"
+                          >
+                            <span>Вернуться назад</span>
+                          </button>
                         </div>
                       ) : (
                         <>
@@ -2484,7 +2551,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                             <span className="text-[10px] text-emerald-400 font-bold font-mono uppercase tracking-wider">👥 Активные сёрферы ({wsLobbyPlayers.length}):</span>
                             <span className="text-[8px] bg-[#10b981]/20 border border-[#10b981] text-emerald-400 px-1.5 rounded font-mono font-bold">ОНЛАЙН</span>
                           </div>
-
+ 
                           {/* Lobby player list */}
                           <div className="max-h-[85px] overflow-y-auto space-y-1.5 pr-1 text-xs font-mono" id="lobby_players_scroller">
                             {wsLobbyPlayers.map((p, idx) => {
@@ -2506,7 +2573,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                               );
                             })}
                           </div>
-
+ 
                           {/* Mobile/Lobby Copy Link Row */}
                           <div className="bg-[#140e29] border border-[#281b4e] rounded-lg p-2 space-y-1.5 lg:hidden" id="mobile_invite_widget">
                             <div className="flex items-center justify-between">
@@ -2530,28 +2597,55 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                               </button>
                             </div>
                           </div>
-
+ 
                           {/* Race Lobby Actions */}
-                          <div className="pt-1 space-y-2">
+                          <div className="pt-1.5 space-y-2">
                             {wsLobbyPlayers[0]?.id === myId ? (
-                              <button
-                                onClick={() => {
-                                  if (wsRef.current?.readyState === WebSocket.OPEN) {
-                                    wsRef.current.send(JSON.stringify({ type: "start_countdown" }));
-                                  }
-                                }}
-                                className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-emerald-600 hover:from-amber-400 hover:to-emerald-500 active:scale-[0.98] text-white font-black text-xs rounded-xl shadow-[0_4px_12px_rgba(16,185,129,0.35)] transition-all flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider"
-                                id="start_countdown_btn"
-                              >
-                                <Play className="w-3.5 h-3.5 fill-white" />
-                                <span>Запустить отсчёт</span>
-                              </button>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => {
+                                    if (wsRef.current?.readyState === WebSocket.OPEN) {
+                                      wsRef.current.send(JSON.stringify({ type: "start_countdown" }));
+                                    }
+                                  }}
+                                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-emerald-600 hover:from-amber-400 hover:to-emerald-500 active:scale-[0.98] text-white font-black text-xs rounded-xl shadow-[0_4px_12px_rgba(16,185,129,0.35)] transition-all flex items-center justify-center gap-1.5 cursor-pointer uppercase tracking-wider"
+                                  id="start_countdown_btn"
+                                >
+                                  <Play className="w-3.5 h-3.5 fill-white" />
+                                  <span>Запустить отсчёт</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setGameMode("solo");
+                                    disconnectWebSocket();
+                                    audio.playHit();
+                                  }}
+                                  className="px-4 py-2.5 bg-[#251d3a] hover:bg-[#342751] text-[#bf94ff] border border-[#4d3283] font-bold text-xs rounded-xl transition-all cursor-pointer"
+                                  title="Покинуть лобби"
+                                  id="leave_lobby_btn"
+                                >
+                                  Покинуть
+                                </button>
+                              </div>
                             ) : (
-                              <div className="bg-[#120a22] border border-[#2c1d4e] rounded-xl p-2 text-center">
-                                <p className="text-[10px] text-gray-400 animate-pulse font-mono font-semibold flex items-center justify-center gap-1.5">
-                                  <span>⏳ Ожидание запуска от хоста:</span>
-                                  <strong className="text-amber-400 font-bold">{wsLobbyPlayers[0]?.name || "Лидер"}</strong>
-                                </p>
+                              <div className="space-y-2">
+                                <div className="bg-[#120a22] border border-[#2c1d4e] rounded-xl p-2 text-center">
+                                  <p className="text-[10px] text-gray-400 animate-pulse font-mono font-semibold flex items-center justify-center gap-1.5">
+                                    <span>⏳ Ожидание запуска от хоста:</span>
+                                    <strong className="text-amber-400 font-bold">{wsLobbyPlayers[0]?.name || "Лидер"}</strong>
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    setGameMode("solo");
+                                    disconnectWebSocket();
+                                    audio.playHit();
+                                  }}
+                                  className="w-full py-2 bg-[#251d3a] hover:bg-[#342751] text-[#bf94ff] border border-[#4d3283] font-bold text-xs rounded-xl transition-all cursor-pointer text-center"
+                                  id="leave_lobby_non_host_btn"
+                                >
+                                  Покинуть лобби
+                                </button>
                               </div>
                             )}
                           </div>
@@ -2572,17 +2666,17 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
 
                       <button
                         onClick={() => setShowRules(true)}
-                        className="w-full py-2 bg-[#120a1c] border border-[#291740] text-gray-300 hover:text-white hover:bg-[#1b1029] active:scale-[0.98] font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="w-full py-2.5 bg-[#120a1c] border border-[#291740] text-gray-300 hover:text-white hover:bg-[#1b1029] active:scale-[0.98] font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                         id="rules_open_btn"
                       >
-                        <BookOpen className="w-3.5 h-3.5 text-[#bf94ff]" />
+                        <BookOpen className="w-4 h-4 text-[#bf94ff]" />
                         <span>Правила и Справочник</span>
                       </button>
                     </div>
                   )}
 
-                  <div className="text-[10px] text-gray-500 font-mono mt-3 space-y-0.5 text-left border-t border-[#1a122e] pt-2.5" id="controls_tips">
-                    <p className="text-center font-bold text-gray-400 mb-0.5 uppercase tracking-wide">Управление:</p>
+                  <div className="text-xs text-gray-400 font-mono mt-4 space-y-1 text-left border-t border-[#231842] pt-3" id="controls_tips">
+                    <p className="text-center font-bold text-gray-300 mb-1 uppercase tracking-wide text-xs">Управление в заплыве:</p>
                     <p>⌨️ Клавиатура: Стрелочки <strong className="text-white">← / →</strong> или клавиши <strong className="text-white">A / D</strong>.</p>
                     <p>📱 Смартфоны: Тапайте кнопки «Грести Влево» и «Грести Вправо».</p>
                   </div>
@@ -2591,6 +2685,39 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
             </div>
           )}
         </div>
+
+        {/* Live Leaderboard under the canvas (visible on all screens during multiplayer active play) */}
+        {isPlaying && gameMode === "multiplayer" && (
+          <div className="block bg-[#0c081a] border-t border-[#1d1434] p-4 text-left font-mono" id="mobile_live_leaderboard">
+            <div className="flex items-center justify-between border-b border-[#21173d] pb-1.5 mb-2">
+              <span className="text-xs text-amber-400 font-extrabold uppercase tracking-wider flex items-center gap-1">
+                🏆 Таблица Лидеров Заплыва:
+              </span>
+              <span className="text-xs text-gray-400">Обновляется в реальном времени</span>
+            </div>
+            <div className="flex flex-row gap-3 overflow-x-auto pb-1.5 text-sm whitespace-nowrap scrollbar-thin" id="mobile_live_list">
+              {(() => {
+                const sorted: any[] = [
+                  { name: playerName, meters: score, skinEmoji: currentSkin.emoji, id: myId || "me", isDead: false },
+                  ...Array.from(otherPlayersRef.current.values())
+                ].sort((a: any, b: any) => b.meters - a.meters);
+
+                return sorted.map((p: any, idx: number) => (
+                  <div key={p.id} className="flex items-center gap-2 bg-[#140e29] border border-[#2b194d] rounded-xl px-3.5 py-1.5 shrink-0 shadow-sm">
+                    <span className="font-extrabold text-[#915eff] text-xs">{idx + 1}</span>
+                    <span className="text-sm select-none">{p.skinEmoji}</span>
+                    <span className={p.id === myId || p.id === "me" ? "text-amber-300 font-black" : "text-gray-100 font-medium"}>
+                      {p.name}
+                    </span>
+                    <span className={`font-black ml-1 ${p.isDead ? "text-red-500 line-through text-xs" : "text-emerald-400"}`}>
+                      {p.isDead ? "выбыл" : `${Math.floor(p.meters)}м`}
+                    </span>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Footer Mobile Controls Row */}
