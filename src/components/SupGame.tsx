@@ -500,7 +500,17 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
     level: 1,
     isLevelUpPaused: false,
     levelUpPauseTimer: 0,
+    shieldCount: 0,
   });
+
+  // Synchronized shield update function
+  const changeShieldCount = (updater: number | ((prev: number) => number)) => {
+    setShieldCount((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      stateRef.current.shieldCount = next;
+      return next;
+    });
+  };
 
   const updateLeaderboard = (newScore: number, skin: Skin) => {
     if (newScore <= 0) return;
@@ -648,11 +658,12 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
       level: 1,
       isLevelUpPaused: false,
       levelUpPauseTimer: 0,
+      shieldCount: 0,
     };
 
     setLives(3);
     setScore(0);
-    setShieldCount(0);
+    changeShieldCount(0);
     setIsPlaying(true);
     setActiveScare(null);
     setIsGlitchedReact(false);
@@ -665,7 +676,8 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
 
   // Paddle manually (Left/Right actions)
   const paddleLeft = () => {
-    const step = 100;
+    const levelMultiplier = 1 + (stateRef.current.level - 1) * 0.12;
+    const step = 100 * levelMultiplier;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const limit = 40;
@@ -678,7 +690,8 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
   };
 
   const paddleRight = () => {
-    const step = 100;
+    const levelMultiplier = 1 + (stateRef.current.level - 1) * 0.12;
+    const step = 100 * levelMultiplier;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const limit = canvas.width - 40;
@@ -704,8 +717,12 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
       if (containerRef.current) {
         canvas.width = Math.min(containerRef.current.clientWidth, 720);
         canvas.height = 600;
-        stateRef.current.playerX = canvas.width / 2;
-        stateRef.current.targetPlayerX = canvas.width / 2;
+        if (!stateRef.current.playerX || stateRef.current.playerX === 0) {
+          stateRef.current.playerX = canvas.width / 2;
+        }
+        if (!stateRef.current.targetPlayerX || stateRef.current.targetPlayerX === 0) {
+          stateRef.current.targetPlayerX = canvas.width / 2;
+        }
         stateRef.current.playerY = canvas.height - 110;
       }
     };
@@ -754,6 +771,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         setGameLevel(newLevel);
         setLevelUpPopup(oldLevel); // completed old level
         audio.playShield();
+        changeShieldCount(0); // Reset shield count on each new level
         
         // Reward SubPoints
         const rewards: { [key: number]: number } = {
@@ -791,7 +809,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
       }
 
       // Background Speed up - smoothly and gradually increases to the end of the level,
-      // and starts from the initial speed (1.8) on each new level.
+      // carrying over and increasing with each new level.
       // Higher levels have higher end speeds and take longer to traverse (more meters).
       let levelStartMeters = 0;
       let levelEndMeters = 100;
@@ -806,23 +824,23 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
       } else if (newLevel === 2) {
         levelStartMeters = 100;
         levelEndMeters = 250;
-        startSpeed = 1.8;
-        endSpeed = 3.2;
+        startSpeed = 2.6;
+        endSpeed = 3.5;
       } else if (newLevel === 3) {
         levelStartMeters = 250;
         levelEndMeters = 500;
-        startSpeed = 1.8;
-        endSpeed = 4.0;
+        startSpeed = 3.5;
+        endSpeed = 4.5;
       } else if (newLevel === 4) {
         levelStartMeters = 500;
         levelEndMeters = 800;
-        startSpeed = 1.8;
-        endSpeed = 5.0;
+        startSpeed = 4.5;
+        endSpeed = 5.6;
       } else {
         levelStartMeters = 800;
         levelEndMeters = 1200;
-        startSpeed = 1.8;
-        endSpeed = 6.2;
+        startSpeed = 5.6;
+        endSpeed = 7.0;
       }
 
       const levelProgress = Math.min(1.0, Math.max(0.0, (state.meters - levelStartMeters) / (levelEndMeters - levelStartMeters)));
@@ -886,8 +904,9 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         }
       }
 
-      // Smooth keyboard movement controls (snappier speed!)
-      const moveSpeed = 750 * delta;
+      // Smooth keyboard movement controls (snappier speed! increases with level)
+      const levelMultiplier = 1 + (state.level - 1) * 0.12;
+      const moveSpeed = 750 * levelMultiplier * delta;
       let leftPressed = keysRef.current["ArrowLeft"] || keysRef.current["KeyA"];
       let rightPressed = keysRef.current["ArrowRight"] || keysRef.current["KeyD"];
 
@@ -908,8 +927,9 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
       // Interpolate player position with snappy responsive factor
       state.playerX += (state.targetPlayerX - state.playerX) * 0.35;
 
-      // Update waves animation offset
-      state.waveOffset = (state.waveOffset + delta * (state.isSpeedBoosted ? 12 : 5)) % canvas.height;
+      // Update waves animation offset (river speed scales with level!)
+      const waveSpeedMultiplier = 1 + (state.level - 1) * 0.15;
+      state.waveOffset = (state.waveOffset + delta * (state.isSpeedBoosted ? 12 : 5) * waveSpeedMultiplier) % canvas.height;
 
       // Physics, collision checks, rendering
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -985,7 +1005,31 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
           "Рыбу мне распугал! 🐟",
           "Лови леща! 🎣",
           "Упадешь сейчас! 🏄‍♂️",
-          "Ха-ха-ха! Чилл окончен!"
+          "Ха-ха-ха! Чилл окончен!",
+          "Греби быстрее, акула сзади! 🦈",
+          "Эй, сап-сёрфер, права-то купил? 👮‍♂️",
+          "Куда прёшь на моё прикормленное место?! 😡",
+          "Мой дед на бревне быстрее плавал! 👴",
+          "Греби сильнее, пузико спадёт! 🧘‍♂️",
+          "Смотри не улети в камыши! 🌾",
+          "Красиво гребёшь, прямо как топор! 🪓",
+          "Осторожно, впереди бобры-рейдеры! 🦫",
+          "Весло не для красоты, маши им! 🚣‍♂️",
+          "Чат, смотрите, новый нуб плывёт! 💬",
+          "Это тебе не ванна, тут волны! 🌊",
+          "Баланс держи, ё-моё! ⚖️",
+          "Опа, спонсор брёвен приплыл! 🪵",
+          "Эй, снимите его на телефон, ща упадёт! 📱",
+          "Опять туристы всю реку заняли! 😤",
+          "Давай трюк с веслом! 🪄",
+          "Капибара плывёт лучше тебя! 🦦",
+          "Стримлер, лови бан от бревна! 🚫",
+          "На доске стоишь, а ума не нажил! 🤪",
+          "Карасей мне не топчи! 🐡",
+          "Эй, попутного ветра в горб! 💨",
+          "Греби усерднее, золото близко! 🏆",
+          "Эпично идёшь! Завидую молча... 😎",
+          "Вот это скилл! (Нет) 🤡"
         ];
         const emojis = ["👴", "🧔", "🤠", "🧙‍♂️", "👮‍♂️"];
         const chosenPhrase = phrases[Math.floor(Math.random() * phrases.length)];
@@ -1095,7 +1139,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         if (f.state === "laughing" || f.state === "entering") {
           ctx.save();
           // Draw speech bubble slightly above and offset
-          const bubbleX = f.side === "left" ? f.x + 45 : f.x - 45;
+          let bubbleX = f.side === "left" ? f.x + 48 : f.x - 48;
           const bubbleY = f.y - 32;
 
           ctx.font = "bold 13px sans-serif";
@@ -1103,9 +1147,20 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
           const paddingX = 12;
           const paddingY = 8;
           const textHeight = 16;
+          const halfWidth = textWidth / 2 + paddingX;
+
+          // Clamp bubbleX so it is always completely within the game screen width (leaving small safety margins)
+          const minX = halfWidth + 8;
+          const maxX = canvas.width - halfWidth - 8;
+          if (bubbleX < minX) {
+            bubbleX = minX;
+          }
+          if (bubbleX > maxX) {
+            bubbleX = maxX;
+          }
 
           // Draw speech bubble background
-          ctx.fillStyle = "rgba(13, 7, 24, 0.95)";
+          ctx.fillStyle = "rgba(13, 7, 24, 0.96)";
           ctx.strokeStyle = "#a78bfa";
           ctx.lineWidth = 1.8;
           ctx.shadowColor = "#915eff";
@@ -1114,7 +1169,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
           ctx.beginPath();
           // Round rect
           ctx.roundRect(
-            bubbleX - textWidth / 2 - paddingX,
+            bubbleX - halfWidth,
             bubbleY - textHeight / 2 - paddingY,
             textWidth + paddingX * 2,
             textHeight + paddingY * 2,
@@ -1123,19 +1178,34 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
           ctx.fill();
           ctx.stroke();
 
-          // Small triangle connector for speech bubble pointing to fisherman
-          ctx.fillStyle = "rgba(13, 7, 24, 0.95)";
+          // Small triangle connector pointing to the fisherman's head center (f.x, f.y)
+          ctx.fillStyle = "rgba(13, 7, 24, 0.96)";
           ctx.beginPath();
           const bubbleBottom = bubbleY + textHeight / 2 + paddingY;
-          if (f.side === "left") {
-            ctx.moveTo(bubbleX - 8, bubbleBottom);
-            ctx.lineTo(bubbleX - 14, bubbleBottom + 6);
-            ctx.lineTo(bubbleX - 2, bubbleBottom);
-          } else {
-            ctx.moveTo(bubbleX + 8, bubbleBottom);
-            ctx.lineTo(bubbleX + 14, bubbleBottom + 6);
-            ctx.lineTo(bubbleX + 2, bubbleBottom);
-          }
+          // Place base on bubble bottom edge, nearest to fisherman's X position
+          const baseCenter = Math.min(bubbleX + halfWidth - 10, Math.max(bubbleX - halfWidth + 10, f.x));
+          ctx.moveTo(baseCenter - 6, bubbleBottom);
+          ctx.lineTo(f.x, f.y - 12); // point directly at fisherman's head
+          ctx.lineTo(baseCenter + 6, bubbleBottom);
+          ctx.closePath();
+          ctx.fill();
+
+          // Draw seamless border for the triangle connector
+          ctx.strokeStyle = "#a78bfa";
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          ctx.moveTo(baseCenter - 6, bubbleBottom);
+          ctx.lineTo(f.x, f.y - 12);
+          ctx.lineTo(baseCenter + 6, bubbleBottom);
+          ctx.stroke();
+
+          // Clean overlapping filled triangle background to conceal the original border line
+          ctx.fillStyle = "rgba(13, 7, 24, 1)";
+          ctx.beginPath();
+          ctx.moveTo(baseCenter - 5, bubbleBottom - 1);
+          ctx.lineTo(f.x, f.y - 11);
+          ctx.lineTo(baseCenter + 5, bubbleBottom - 1);
+          ctx.closePath();
           ctx.fill();
 
           // Draw the phrase text
@@ -1210,72 +1280,309 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         ctx.rotate(obj.type === "log" ? Math.sin(obj.angle) * 0.1 : obj.angle * 0.2);
 
         if (obj.type === "log") {
-          // Log (obstacle)
-          ctx.fillStyle = "#8a5229";
-          ctx.strokeStyle = "#5a3418";
-          ctx.lineWidth = 2;
+          // Beautiful 3D wood log with gradient, end rings, and bark crevices
+          const logGrad = ctx.createLinearGradient(0, -obj.height / 2, 0, obj.height / 2);
+          logGrad.addColorStop(0, "#a05e32"); // light top
+          logGrad.addColorStop(0.4, "#7a431d"); // mid bark
+          logGrad.addColorStop(1, "#44210a"); // dark shadow under
+          ctx.fillStyle = logGrad;
+          ctx.strokeStyle = "#291305";
+          ctx.lineWidth = 2.5;
           ctx.beginPath();
-          ctx.roundRect(-obj.width / 2, -obj.height / 2, obj.width, obj.height, 4);
+          ctx.roundRect(-obj.width / 2, -obj.height / 2, obj.width, obj.height, 6);
           ctx.fill();
           ctx.stroke();
-          // Draw wood lines
-          ctx.strokeStyle = "#3e220f";
+
+          // End cross-section cut wood rings (left and right)
+          ctx.fillStyle = "#ddb892";
           ctx.beginPath();
-          ctx.moveTo(-obj.width / 3, -2);
-          ctx.lineTo(obj.width / 3, -2);
+          ctx.ellipse(-obj.width / 2 + 3, 0, 4, obj.height / 2 - 3, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#7a431d";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          ctx.fillStyle = "#ddb892";
+          ctx.beginPath();
+          ctx.ellipse(obj.width / 2 - 3, 0, 4, obj.height / 2 - 3, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#7a431d";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // Organic wood lines/bark texture
+          ctx.strokeStyle = "rgba(40, 18, 5, 0.45)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(-obj.width / 3, -6);
+          ctx.lineTo(obj.width / 4, -6);
+          ctx.moveTo(-obj.width / 4, 4);
+          ctx.lineTo(obj.width / 3, 4);
           ctx.stroke();
         } else if (obj.type === "duck") {
-          // Funny rubber duck
-          ctx.font = "24px sans-serif";
-          ctx.fillText("🦆", -12, 10);
-        } else if (obj.type === "ban") {
-          // Red ban hammer circle
-          ctx.fillStyle = "rgba(220, 38, 38, 0.35)";
-          ctx.strokeStyle = "#dc2626";
-          ctx.lineWidth = 2;
+          // Custom beautiful stylized vector rubber ducky (no emoji!)
+          // Golden yellow body and head with soft 3D shading
+          ctx.save();
+          
+          // Outer subtle body shadow
+          ctx.fillStyle = "rgba(0,0,0,0.1)";
           ctx.beginPath();
-          ctx.arc(0, 0, obj.width / 2, 0, Math.PI * 2);
+          ctx.ellipse(0, 8, 14, 6, 0, 0, Math.PI * 2);
           ctx.fill();
+
+          // Yellow duck body gradient
+          const duckBodyGrad = ctx.createRadialGradient(-4, -2, 2, 0, 0, 15);
+          duckBodyGrad.addColorStop(0, "#fff5ad"); // highlights
+          duckBodyGrad.addColorStop(0.3, "#facc15"); // yellow base
+          duckBodyGrad.addColorStop(1, "#ca8a04"); // shadow
+          ctx.fillStyle = duckBodyGrad;
+          
+          // Body
+          ctx.beginPath();
+          ctx.ellipse(2, 2, 14, 10, 0, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Wing shape
+          ctx.fillStyle = "#facc15";
+          ctx.beginPath();
+          ctx.ellipse(-2, 0, 7, 5, -0.2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#b45309";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // Head (slightly offset to the right/front)
+          ctx.fillStyle = duckBodyGrad;
+          ctx.beginPath();
+          ctx.arc(8, -8, 7.5, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Beak (bright orange glossy bill)
+          const beakGrad = ctx.createLinearGradient(12, -8, 20, -6);
+          beakGrad.addColorStop(0, "#fb923c");
+          beakGrad.addColorStop(1, "#ea580c");
+          ctx.fillStyle = beakGrad;
+          ctx.beginPath();
+          ctx.moveTo(14, -10);
+          ctx.quadraticCurveTo(20, -10, 19, -7);
+          ctx.quadraticCurveTo(14, -6, 14, -6);
+          ctx.closePath();
+          ctx.fill();
+
+          // Cute glossy eye
+          ctx.fillStyle = "#0f172a";
+          ctx.beginPath();
+          ctx.arc(7, -10, 1.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.arc(6.5, -11, 0.6, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.restore();
+        } else if (obj.type === "ban") {
+          // Cyberpunk/Arcade Glowing Ban Hammer of Justice!
+          ctx.save();
+          // Draw Handle
+          ctx.strokeStyle = "#64748b";
+          ctx.lineWidth = 3.5;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.moveTo(-12, 12);
+          ctx.lineTo(6, -6);
           ctx.stroke();
           
+          // Draw metallic grip tape bands on the handle
+          ctx.strokeStyle = "#e2e8f0";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(-8, 8);
+          ctx.lineTo(-6, 6);
+          ctx.moveTo(-4, 4);
+          ctx.lineTo(-2, 2);
+          ctx.stroke();
+
+          // Draw Hammer Head (Double Sided Cyber Sledge)
+          ctx.translate(6, -6);
+          ctx.rotate(Math.PI / 4);
+
+          // Head Base Gradient (Metallic charcoal with red warning indicators)
+          const headGrad = ctx.createLinearGradient(-14, -8, 14, 8);
+          headGrad.addColorStop(0, "#334155");
+          headGrad.addColorStop(0.5, "#1e293b");
+          headGrad.addColorStop(1, "#0f172a");
+          ctx.fillStyle = headGrad;
+          ctx.strokeStyle = "#ef4444";
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          ctx.roundRect(-14, -7, 28, 14, 3);
+          ctx.fill();
+          ctx.stroke();
+
+          // Glowing Red Warning core stripe
+          ctx.fillStyle = "#f87171";
+          ctx.shadowColor = "#ef4444";
+          ctx.shadowBlur = 6;
+          ctx.fillRect(-2, -7, 4, 14);
+          ctx.shadowBlur = 0;
+
+          // Side caps
+          ctx.fillStyle = "#94a3b8";
+          ctx.fillRect(-15, -5, 1, 10);
+          ctx.fillRect(14, -5, 1, 10);
+
+          // Draw small "BAN" tag on the hammer head
           ctx.fillStyle = "#ffffff";
-          ctx.font = "bold 10px monospace";
+          ctx.font = "bold 7px monospace";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.fillText("BAN", 0, 0);
+
+          ctx.restore();
         } else if (obj.type === "coin") {
-          // Golden sub points coin
+          // Golden sub points coin with 3D layers and shiny reflections
           const pulseScale = 1 + Math.sin(obj.pulse || 0) * 0.15;
           ctx.scale(pulseScale, pulseScale);
-          ctx.fillStyle = "#f59e0b";
-          ctx.strokeStyle = "#d97706";
+
+          // Golden outer border linear gradient
+          const goldGrad = ctx.createLinearGradient(-obj.width / 2, -obj.height / 2, obj.width / 2, obj.height / 2);
+          goldGrad.addColorStop(0, "#fbbf24"); // Light sparkling gold
+          goldGrad.addColorStop(0.4, "#f59e0b"); // Warm amber gold
+          goldGrad.addColorStop(1, "#b45309"); // Deep bronze gold
+
+          ctx.fillStyle = goldGrad;
+          ctx.strokeStyle = "#78350f";
           ctx.lineWidth = 1.5;
           ctx.beginPath();
           ctx.arc(0, 0, obj.width / 2, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
-          // Coin inner detail
-          ctx.fillStyle = "#fff";
-          ctx.font = "bold 10px sans-serif";
+
+          // Inner gold face inset circle
+          ctx.fillStyle = "#f59e0b";
+          ctx.beginPath();
+          ctx.arc(0, 0, obj.width / 2 - 3, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "#b45309";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // Star logo inside
+          ctx.fillStyle = "#ffffff";
+          ctx.shadowColor = "#fffbeb";
+          ctx.shadowBlur = 4;
+          ctx.font = "bold 11px sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
           ctx.fillText("★", 0, 0);
+          ctx.shadowBlur = 0;
+
+          // Shiny bright specular gloss arc overlay
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.45)";
+          ctx.lineWidth = 1.5;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          ctx.arc(0, 0, obj.width / 2 - 1.5, Math.PI * 1.25, Math.PI * 1.75);
+          ctx.stroke();
         } else if (obj.type === "shield") {
-          // Shield bubble item
-          ctx.fillStyle = "rgba(16, 185, 129, 0.35)";
-          ctx.strokeStyle = "#10b981";
-          ctx.lineWidth = 2;
+          // Glassy emerald holographic shield bubble orb
+          const orbGrad = ctx.createRadialGradient(-3, -3, 2, 0, 0, obj.width / 2);
+          orbGrad.addColorStop(0, "rgba(52, 211, 153, 0.6)"); // light green inner
+          orbGrad.addColorStop(0.7, "rgba(16, 185, 129, 0.3)"); // rich emerald
+          orbGrad.addColorStop(1, "rgba(4, 120, 87, 0.75)"); // deep green outer boundary
+
+          ctx.fillStyle = orbGrad;
+          ctx.strokeStyle = "#34d399";
+          ctx.lineWidth = 1.8;
           ctx.beginPath();
           ctx.arc(0, 0, obj.width / 2, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
-          // Shield symbol
-          ctx.font = "14px sans-serif";
-          ctx.fillText("🛡️", -7, 5);
+
+          // Glowing vector shield emblem inside
+          ctx.fillStyle = "#ffffff";
+          ctx.shadowColor = "#34d399";
+          ctx.shadowBlur = 6;
+          ctx.beginPath();
+          // Shield shape drawn with smooth curves
+          ctx.moveTo(0, -7);
+          ctx.lineTo(5, -4);
+          ctx.lineTo(5, 1);
+          ctx.quadraticCurveTo(5, 5, 0, 8);
+          ctx.quadraticCurveTo(-5, 5, -5, 1);
+          ctx.lineTo(-5, -4);
+          ctx.closePath();
+          ctx.fill();
+          ctx.shadowBlur = 0;
+
+          // Inner shield detail lines
+          ctx.strokeStyle = "#059669";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(0, -5);
+          ctx.lineTo(0, 6);
+          ctx.moveTo(-3, -1);
+          ctx.lineTo(3, -1);
+          ctx.stroke();
+
+          // Reflective white glossy highlight on top left
+          ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+          ctx.beginPath();
+          ctx.ellipse(-4, -4, 4, 2, Math.PI / 4, 0, Math.PI * 2);
+          ctx.fill();
         } else if (obj.type === "coffee") {
-          // Speed boost energy water bottle emoji
-          ctx.font = "22px sans-serif";
-          ctx.fillText("🥤", -10, 8);
+          // Speed boost energy drink can with glossy metal caps and electric neon theme
+          ctx.save();
+          // Shiny can base gradient
+          const canGrad = ctx.createLinearGradient(-obj.width / 3, 0, obj.width / 3, 0);
+          canGrad.addColorStop(0, "#06b6d4"); // electric blue-green cyan
+          canGrad.addColorStop(0.3, "#22d3ee"); // cyan highlight
+          canGrad.addColorStop(0.7, "#0891b2"); // rich ocean blue
+          canGrad.addColorStop(1, "#0e7490"); // dark shadow edge
+
+          ctx.fillStyle = canGrad;
+          ctx.strokeStyle = "#155e75";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.roundRect(-obj.width / 3, -obj.height / 2, (obj.width / 3) * 2, obj.height, 4);
+          ctx.fill();
+          ctx.stroke();
+
+          // Metal Top and Bottom Rim Rings
+          ctx.fillStyle = "#cbd5e1";
+          ctx.strokeStyle = "#64748b";
+          ctx.lineWidth = 1;
+          
+          ctx.beginPath();
+          ctx.ellipse(0, -obj.height / 2, obj.width / 3, 2, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.ellipse(0, obj.height / 2, obj.width / 3, 2, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+
+          // Neon lightning bolt emblem on the can
+          ctx.fillStyle = "#fbbf24";
+          ctx.shadowColor = "#f59e0b";
+          ctx.shadowBlur = 6;
+          ctx.beginPath();
+          ctx.moveTo(1, -6);
+          ctx.lineTo(-4, 0);
+          ctx.lineTo(-1, 0);
+          ctx.lineTo(-1.5, 6);
+          ctx.lineTo(4, -1);
+          ctx.lineTo(1, -1);
+          ctx.closePath();
+          ctx.fill();
+          ctx.shadowBlur = 0;
+
+          // Glossy sheen reflection overlay
+          ctx.fillStyle = "rgba(255, 255, 255, 0.18)";
+          ctx.fillRect(-obj.width / 3, -obj.height / 2 + 1, 2, obj.height - 2);
+
+          ctx.restore();
         }
 
         ctx.restore();
@@ -1310,17 +1617,17 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
             });
           } else if (obj.type === "shield") {
             audio.playShield();
-            setShieldCount((prev) => prev + 1);
+            changeShieldCount((prev) => Math.min(2, prev + 1));
           } else if (obj.type === "coffee") {
             audio.playShield();
             state.isSpeedBoosted = true;
             state.boostTimeLeft = 6.0; // 6 seconds nitro speed boost
           } else {
             // Collision with hazards (log, ban, duck)
-            if (shieldCount > 0) {
+            if (state.shieldCount > 0) {
               // Absorbed by shield
               audio.playShield();
-              setShieldCount((prev) => prev - 1);
+              changeShieldCount((prev) => prev - 1);
             } else {
               // Deduct life
               audio.playHit();
@@ -1454,47 +1761,125 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
       const floatOffset = Math.sin(time * 0.005) * 2;
       ctx.translate(0, floatOffset);
 
-      // Draw the surfboard (oval)
-      ctx.fillStyle = boardColor;
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 1.5;
+      // Draw a highly polished, realistic 3D fiberglass SUP board (pointed racing board shape!)
+      ctx.save();
+      // Outer board glow
       ctx.shadowColor = boardColor;
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 12;
+      
+      // Pointed SUP Board path (nose is top/negative Y, tail is bottom/positive Y)
       ctx.beginPath();
-      ctx.ellipse(0, 0, state.playerWidth / 2, state.playerHeight / 2, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      const hw = state.playerWidth / 2;
+      const hh = state.playerHeight / 2;
+      
+      // Draw sleek streamlined outline
+      ctx.moveTo(0, -hh); // Nose
+      ctx.quadraticCurveTo(hw + 2, -hh / 2, hw, 0); // Right shoulder
+      ctx.lineTo(hw - 1.5, hh / 2); // Right middle
+      ctx.quadraticCurveTo(hw - 3, hh - 1, 0, hh); // Tail right
+      ctx.quadraticCurveTo(-hw + 3, hh - 1, -hw + 1.5, hh / 2); // Tail left
+      ctx.lineTo(-hw, 0); // Left middle
+      ctx.quadraticCurveTo(-hw - 2, -hh / 2, 0, -hh); // Left shoulder
+      ctx.closePath();
 
-      // Reset shadows for player drawing
+      // Board gradient (gorgeous gelcoat shading)
+      const boardGrad = ctx.createLinearGradient(-hw, 0, hw, 0);
+      boardGrad.addColorStop(0, boardColor);
+      boardGrad.addColorStop(0.3, "rgba(255, 255, 255, 0.25)"); // reflection Highlight
+      boardGrad.addColorStop(0.5, boardColor);
+      boardGrad.addColorStop(1, "rgba(0, 0, 0, 0.25)"); // side shadow
+      
+      ctx.fillStyle = boardColor;
+      ctx.fill();
+
+      // Apply the glossy gelcoat shading layer
+      ctx.fillStyle = boardGrad;
+      ctx.fill();
+
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+
+      // Reset shadows
       ctx.shadowBlur = 0;
 
-      // Draw stripes on the board
-      ctx.strokeStyle = "rgba(0,0,0,0.15)";
-      ctx.lineWidth = 4;
+      // Draw custom rubberized deck pad (grip mat) on the board
+      ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
       ctx.beginPath();
-      ctx.moveTo(0, -state.playerHeight / 2);
-      ctx.lineTo(0, state.playerHeight / 2);
+      ctx.ellipse(0, 2, hw - 3.5, hh - 10, 0, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Draw deck pad horizontal traction grooves
+      ctx.strokeStyle = "rgba(0,0,0,0.12)";
+      ctx.lineWidth = 1;
+      for (let gy = -hh + 12; gy < hh - 10; gy += 4) {
+        ctx.beginPath();
+        const ratio = gy / (hh - 10);
+        const factor = 1 - ratio * ratio;
+        const gw = (hw - 3.5) * (factor > 0 ? Math.sqrt(factor) : 0);
+        ctx.moveTo(-gw, gy);
+        ctx.lineTo(gw, gy);
+        ctx.stroke();
+      }
+
+      // Draw sporty racing double-stripe (stringer) down the center
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, -hh + 2);
+      ctx.lineTo(0, hh - 2);
       ctx.stroke();
 
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(2, -hh + 4);
+      ctx.lineTo(2, hh - 4);
+      ctx.stroke();
+
+      // Draw high-quality water spray particles/wake trails from sides/tail
+      ctx.fillStyle = "rgba(255, 255, 255, 0.65)";
+      for (let s = 0; s < 4; s++) {
+        const splashSide = Math.random() > 0.5 ? 1 : -1;
+        const sx = (hw - 1) * splashSide + (Math.random() - 0.5) * 4;
+        const sy = hh / 2 + Math.random() * (hh / 2);
+        const sr = 1 + Math.random() * 2.5;
+        ctx.beginPath();
+        ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Draw rear foaming wake bubblers
+      ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+      for (let w = 0; w < 3; w++) {
+        const wx = (Math.random() - 0.5) * 12;
+        const wy = hh + 3 + Math.random() * 12;
+        const wr = 1.5 + Math.random() * 3;
+        ctx.beginPath();
+        ctx.arc(wx, wy, wr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       // Draw active shield bubble
-      if (shieldCount > 0) {
+      if (state.shieldCount > 0) {
         ctx.strokeStyle = "#10b981";
         ctx.fillStyle = "rgba(16, 185, 129, 0.15)";
-        ctx.lineWidth = 1.5 + shieldCount * 1.5;
+        ctx.lineWidth = 1.5 + state.shieldCount * 1.5;
         ctx.beginPath();
         ctx.arc(0, 0, state.playerHeight / 2 + 10, 0, Math.PI * 2);
         ctx.stroke();
         ctx.fill();
 
         // Draw multiple ring effects if they have 2+ shields
-        if (shieldCount >= 2) {
+        if (state.shieldCount >= 2) {
           ctx.strokeStyle = "rgba(16, 185, 129, 0.4)";
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.arc(0, 0, state.playerHeight / 2 + 16, 0, Math.PI * 2);
           ctx.stroke();
         }
-        if (shieldCount >= 3) {
+        if (state.shieldCount >= 3) {
           ctx.strokeStyle = "rgba(16, 185, 129, 0.2)";
           ctx.lineWidth = 1;
           ctx.beginPath();
@@ -1503,14 +1888,14 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         }
 
         // Draw shield count text over the player
-        if (shieldCount > 1) {
+        if (state.shieldCount > 1) {
           ctx.save();
           ctx.font = "bold 11px monospace";
           ctx.fillStyle = "#10b981";
           ctx.shadowColor = "#000000";
           ctx.shadowBlur = 3;
           ctx.textAlign = "center";
-          ctx.fillText(`x${shieldCount}`, 0, -state.playerHeight / 2 - 15);
+          ctx.fillText(`x${state.shieldCount}`, 0, -state.playerHeight / 2 - 15);
           ctx.restore();
         }
       }
@@ -1534,34 +1919,393 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
 
       // Draw glowing suit / character aura behind local player
       ctx.save();
-      ctx.shadowColor = characterColor;
-      ctx.shadowBlur = 10;
-      ctx.fillStyle = characterColor;
-      ctx.globalAlpha = 0.8;
+      ctx.shadowColor = characterColor || "#fff";
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
       ctx.beginPath();
-      ctx.arc(0, -12, 8, 0, Math.PI * 2);
+      ctx.arc(0, -8, 12, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
 
-      // Draw Player Character Emojis representing skins
-      ctx.font = "32px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(currentSkin.emoji, 0, -10);
-
-      // Draw paddle vector lines
-      ctx.strokeStyle = "#5a3418";
-      ctx.lineWidth = 2;
+      // Top-down Premium Stylized Character Renderer
+      ctx.save();
+      const skinId = currentSkin.id;
       const paddleSide = Math.sin(time * 0.01) > 0 ? 1 : -1;
+
+      // Draw hands & paddle connection lines (shoulders to hands)
+      ctx.strokeStyle = "rgba(0,0,0,0.3)";
+      ctx.lineWidth = 4;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(-6, -6);
+      ctx.lineTo(10 * paddleSide, 0);
+      ctx.moveTo(6, -6);
+      ctx.lineTo(10 * paddleSide, 0);
+      ctx.stroke();
+
+      if (skinId === "surfer") {
+        // --- 1. CLASSIK SURFER (Beach Guy in Board Shorts) ---
+        ctx.fillStyle = "#ff6b81"; // pink base shorts
+        ctx.beginPath();
+        ctx.roundRect(-7, -10, 14, 12, 4);
+        ctx.fill();
+        ctx.fillStyle = "#2ed573"; // cyan detail stripe
+        ctx.fillRect(-7, -4, 14, 3);
+
+        // Shoulders / Chest (tanned skin)
+        ctx.fillStyle = "#f5bc96";
+        ctx.beginPath();
+        ctx.ellipse(0, -8, 8, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Head
+        ctx.beginPath();
+        ctx.arc(0, -17, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Blonde surfer hair
+        ctx.fillStyle = "#fed330";
+        ctx.beginPath();
+        ctx.arc(-2, -19, 3, 0, Math.PI * 2);
+        ctx.arc(2, -19, 3, 0, Math.PI * 2);
+        ctx.arc(0, -21, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Cool black shades
+        ctx.fillStyle = "#1e272e";
+        ctx.fillRect(-4, -18, 8, 2.5);
+      } else if (skinId === "capybara") {
+        // --- 2. MR CAPYBARA (Ultimate Chill Furry Animal) ---
+        ctx.fillStyle = "#8a5a36"; // Capybara brown fur
+        ctx.beginPath();
+        ctx.roundRect(-9, -12, 18, 15, 8);
+        ctx.fill();
+
+        // Soft cream colored belly pad
+        ctx.fillStyle = "#dfb48c";
+        ctx.beginPath();
+        ctx.ellipse(0, -6, 5, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Cute capybara head
+        ctx.fillStyle = "#704829";
+        ctx.beginPath();
+        ctx.roundRect(-6, -21, 12, 10, 5);
+        ctx.fill();
+
+        // Sleepy chill eyes
+        ctx.strokeStyle = "#2f1a0c";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(-3, -17);
+        ctx.quadraticCurveTo(-2, -16, -1, -17);
+        ctx.moveTo(1, -17);
+        ctx.quadraticCurveTo(2, -16, 3, -17);
+        ctx.stroke();
+
+        // Cute tropical flower on ears
+        ctx.fillStyle = "#eb3b5a";
+        ctx.beginPath();
+        ctx.arc(4, -20, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#fed330";
+        ctx.beginPath();
+        ctx.arc(4, -20, 0.8, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (skinId === "mod") {
+        // --- 3. TWITCH MODERATOR (Cyber Hooded Warrior) ---
+        ctx.fillStyle = "#6441a5"; // Twitch purple
+        ctx.beginPath();
+        ctx.roundRect(-8, -11, 16, 14, 5);
+        ctx.fill();
+
+        // Glowing green moderation badge on back
+        ctx.fillStyle = "#10b981";
+        ctx.shadowColor = "#10b981";
+        ctx.shadowBlur = 5;
+        ctx.fillRect(-2, -7, 4, 4);
+        ctx.shadowBlur = 0;
+
+        // Hood
+        ctx.fillStyle = "#432874";
+        ctx.beginPath();
+        ctx.ellipse(0, -17, 7, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Dark face cavity
+        ctx.fillStyle = "#1a0f30";
+        ctx.beginPath();
+        ctx.ellipse(0, -16, 4, 3.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Glowing green gamer headset
+        ctx.strokeStyle = "#10b981";
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.arc(0, -17, 6.5, Math.PI, 0);
+        ctx.stroke();
+        ctx.fillStyle = "#10b981";
+        ctx.beginPath();
+        ctx.arc(-6.5, -17, 2, 0, Math.PI * 2);
+        ctx.arc(6.5, -17, 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (skinId === "duck_king") {
+        // --- 4. DUCK KING (Royal Ducky in Crown) ---
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.ellipse(0, -7, 9, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Royal velvet red mantle cape on shoulders
+        ctx.fillStyle = "#dc2626";
+        ctx.beginPath();
+        ctx.moveTo(-9, -8);
+        ctx.quadraticCurveTo(0, -3, 9, -8);
+        ctx.lineTo(6, -2);
+        ctx.lineTo(-6, -2);
+        ctx.closePath();
+        ctx.fill();
+
+        // Gold trim
+        ctx.strokeStyle = "#fbbf24";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Duck Head
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(0, -16, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Orange Beak
+        ctx.fillStyle = "#f97316";
+        ctx.beginPath();
+        ctx.ellipse(0, -19, 4, 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Golden Royal Crown with rubies
+        ctx.fillStyle = "#f59e0b";
+        ctx.beginPath();
+        ctx.moveTo(-4, -20);
+        ctx.lineTo(-5, -24);
+        ctx.lineTo(-2, -22);
+        ctx.lineTo(0, -26); // Center spire
+        ctx.lineTo(2, -22);
+        ctx.lineTo(5, -24);
+        ctx.lineTo(4, -20);
+        ctx.closePath();
+        ctx.fill();
+
+        // Tiny ruby on center spire
+        ctx.fillStyle = "#ef4444";
+        ctx.beginPath();
+        ctx.arc(0, -26, 0.8, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (skinId === "cyber_surfer") {
+        // --- 5. CYBER SURFER 2077 (Neon Sci-fi Cyborg) ---
+        ctx.fillStyle = "#1e293b";
+        ctx.beginPath();
+        ctx.roundRect(-8, -11, 16, 13, 4);
+        ctx.fill();
+
+        // Glowing neon cyan circuitry traces
+        ctx.strokeStyle = "#06b6d4";
+        ctx.lineWidth = 1.5;
+        ctx.shadowColor = "#06b6d4";
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.moveTo(-5, -8);
+        ctx.lineTo(-5, -4);
+        ctx.moveTo(5, -8);
+        ctx.lineTo(5, -4);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Cybernetic sleek helmet
+        ctx.fillStyle = "#334155";
+        ctx.beginPath();
+        ctx.ellipse(0, -17, 6.5, 5.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Bright neon cyan glowing cyber visor
+        ctx.fillStyle = "#22d3ee";
+        ctx.shadowColor = "#22d3ee";
+        ctx.shadowBlur = 5;
+        ctx.beginPath();
+        ctx.ellipse(0, -18, 5, 1.8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      } else if (skinId === "alien") {
+        // --- 6. ALIEN POLL (Lime Green Extraterrestrial tourist) ---
+        ctx.fillStyle = "#84cc16";
+        ctx.beginPath();
+        ctx.ellipse(0, -8, 7.5, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Retro red Hawaiian tourist shirt!
+        ctx.fillStyle = "#ef4444";
+        ctx.beginPath();
+        ctx.roundRect(-6.5, -9, 13, 9, 2);
+        ctx.fill();
+        // Yellow hibiscus print details
+        ctx.fillStyle = "#facc15";
+        ctx.beginPath();
+        ctx.arc(-3, -7, 1, 0, Math.PI * 2);
+        ctx.arc(3, -5, 1, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Bulbous alien head
+        ctx.fillStyle = "#84cc16";
+        ctx.beginPath();
+        ctx.ellipse(0, -17, 8, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Huge glossy black bug eyes
+        ctx.fillStyle = "#020617";
+        ctx.beginPath();
+        ctx.ellipse(-3.5, -18, 2.5, 4, Math.PI / 10, 0, Math.PI * 2);
+        ctx.ellipse(3.5, -18, 2.5, 4, -Math.PI / 10, 0, Math.PI * 2);
+        ctx.fill();
+        // Sparkle in alien eyes
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(-2.5, -19, 0.6, 0, Math.PI * 2);
+        ctx.arc(4.5, -19, 0.6, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (skinId === "ninja") {
+        // --- 7. SHADOW NINJA (Stealth Shinobi) ---
+        ctx.fillStyle = "#1e1b4b"; // very dark blue-black
+        ctx.beginPath();
+        ctx.roundRect(-8, -11, 16, 14, 4);
+        ctx.fill();
+
+        // Crimson red flowing sash blowing behind
+        ctx.fillStyle = "#ef4444";
+        ctx.beginPath();
+        ctx.moveTo(-3, -2);
+        ctx.quadraticCurveTo(-8 + Math.sin(time * 0.08) * 3, 4, -5, 8);
+        ctx.quadraticCurveTo(-11 + Math.sin(time * 0.08) * 3, 4, -1, -2);
+        ctx.closePath();
+        ctx.fill();
+
+        // Head wrapped in full hood
+        ctx.fillStyle = "#0f172a";
+        ctx.beginPath();
+        ctx.ellipse(0, -17, 6.5, 5.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Headband tie knot
+        ctx.fillStyle = "#ef4444";
+        ctx.beginPath();
+        ctx.ellipse(-6, -18, 1.5, 2.5, Math.PI / 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Glowing white slits representing focused ninja eyes
+        ctx.fillStyle = "#ffffff";
+        ctx.shadowColor = "#ffffff";
+        ctx.shadowBlur = 4;
+        ctx.fillRect(-3.5, -17.5, 2, 0.8);
+        ctx.fillRect(1.5, -17.5, 2, 0.8);
+        ctx.shadowBlur = 0;
+      } else if (skinId === "gold_champ") {
+        // --- 8. GOLD CHAMPION (Solid Gold Luxury Surfer) ---
+        ctx.shadowColor = "#fbbf24";
+        ctx.shadowBlur = 15;
+
+        // High gloss shining gold body
+        const goldBodyGrad = ctx.createRadialGradient(-3, -11, 2, 0, -8, 12);
+        goldBodyGrad.addColorStop(0, "#fffbeb"); // highlight reflection
+        goldBodyGrad.addColorStop(0.3, "#facc15"); // gold center
+        goldBodyGrad.addColorStop(1, "#9a3412"); // deep gold copper shadow
+        ctx.fillStyle = goldBodyGrad;
+
+        ctx.beginPath();
+        ctx.roundRect(-8, -11, 16, 14, 5);
+        ctx.fill();
+
+        // Golden head
+        ctx.beginPath();
+        ctx.arc(0, -17, 6.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Gold star crown
+        ctx.fillStyle = "#fbbf24";
+        ctx.beginPath();
+        ctx.moveTo(-4, -21);
+        ctx.lineTo(-2, -24);
+        ctx.lineTo(0, -21);
+        ctx.lineTo(2, -24);
+        ctx.lineTo(4, -21);
+        ctx.closePath();
+        ctx.fill();
+
+        // Sparkly white diamond on his chest
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.moveTo(0, -8);
+        ctx.lineTo(2, -6);
+        ctx.lineTo(0, -4);
+        ctx.lineTo(-2, -6);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.shadowBlur = 0;
+      } else {
+        // Fallback default classy surfer
+        ctx.fillStyle = characterColor;
+        ctx.beginPath();
+        ctx.arc(0, -10, 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+
+      // Draw custom themed paddle
+      ctx.save();
+      let paddleShaftColor = "#5a3418"; // default wooden
+      let paddleBladeColor = characterColor;
+      let paddleGlowColor = "transparent";
+
+      if (skinId === "cyber_surfer") {
+        paddleShaftColor = "#475569";
+        paddleBladeColor = "#22d3ee";
+        paddleGlowColor = "#06b6d4";
+      } else if (skinId === "ninja") {
+        paddleShaftColor = "#1e1b4b";
+        paddleBladeColor = "#ef4444";
+      } else if (skinId === "mod") {
+        paddleShaftColor = "#432874";
+        paddleBladeColor = "#10b981";
+        paddleGlowColor = "#10b981";
+      } else if (skinId === "gold_champ") {
+        paddleShaftColor = "#d97706";
+        paddleBladeColor = "#fbbf24";
+        paddleGlowColor = "#fbbf24";
+      } else if (skinId === "alien") {
+        paddleShaftColor = "#334155";
+        paddleBladeColor = "#a3e635";
+        paddleGlowColor = "#84cc16";
+      }
+
+      if (paddleGlowColor !== "transparent") {
+        ctx.shadowColor = paddleGlowColor;
+        ctx.shadowBlur = 8;
+      }
+
+      // Draw paddle shaft
+      ctx.strokeStyle = paddleShaftColor;
+      ctx.lineWidth = 2.2;
       ctx.beginPath();
       ctx.moveTo(0, -5);
       ctx.lineTo(24 * paddleSide, 15);
       ctx.stroke();
+
       // Draw paddle blade
-      ctx.fillStyle = characterColor;
+      ctx.fillStyle = paddleBladeColor;
       ctx.beginPath();
-      ctx.ellipse(24 * paddleSide, 15, 4, 8, Math.PI / 4, 0, Math.PI * 2);
+      ctx.ellipse(24 * paddleSide, 15, 4.5, 9, Math.PI / 4, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
 
       ctx.restore();
 
@@ -1574,7 +2318,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
     return () => {
       cancelAnimationFrame(animationId);
     };
-  }, [isPlaying, currentSkin, shieldCount, boardColor, characterColor]);
+  }, [isPlaying, currentSkin, boardColor, characterColor]);
 
   return (
     <div className="relative flex flex-col lg:flex-row items-stretch justify-center gap-6 lg:gap-8 max-w-[1100px] w-full mx-auto" id="sup_game_wrapper_outer">
@@ -2178,7 +2922,8 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
 
           {/* START/GAMEOVER INTERACTIVE SCREEN OVERLAY */}
           {!isPlaying && (
-            <div className="absolute inset-0 bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center z-20 animate-fade-in" id="arcade_intro_screen">
+            <div className="absolute inset-0 bg-black/85 backdrop-blur-sm overflow-y-auto p-4 md:p-6 text-center z-20 animate-fade-in scrollbar-thin" id="arcade_intro_screen">
+              <div className="min-h-full flex flex-col items-center justify-center w-full py-2" id="arcade_intro_content_wrapper">
               {/* Synchronized Multiplayer Countdown Overlay */}
               {wsCountdown !== null ? (
                 <div className="space-y-4 font-mono select-none" id="ws_countdown_panel">
@@ -2682,6 +3427,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                   </div>
                 </motion.div>
               )}
+              </div>
             </div>
           )}
         </div>
