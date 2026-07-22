@@ -226,6 +226,37 @@ const SKINS: Skin[] = [
   { id: "gold_champ", name: "Золотой Чемпион", emoji: "🏆👑", price: 500, description: "Легендарный сёрфер в чистом золоте побед.", color: "#fbbf24" },
 ];
 
+interface Perk {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  emoji: string;
+}
+
+const PERKS: Perk[] = [
+  { id: "magnet_board", name: "Магнитный Сап 🧲", description: "Притягивает звезды (монетки) в радиусе 130px.", price: 60, emoji: "🧲" },
+  { id: "shield_start", name: "Броня на старте 🛡️", description: "Каждый заплыв начинается с уже готовым щитом!", price: 90, emoji: "🛡️" },
+  { id: "coffee_gourmet", name: "Кофейный Гурман ☕", description: "Увеличивает Nitro-ускорение от синей воды до 9 секунд.", price: 50, emoji: "☕" },
+  { id: "double_gold", name: "Золотой Прииск 💎", description: "Каждая звезда дает по 2 монеты вместо 1!", price: 120, emoji: "💎" },
+  { id: "heavy_deck", name: "Крепкая Корма 🧱", description: "Сокращает время реверса управления от молота в два раза.", price: 70, emoji: "🧱" },
+];
+
+interface Companion {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  emoji: string;
+  detail: string;
+}
+
+const COMPANIONS: Companion[] = [
+  { id: "capybara_bro", name: "Капибара Бро 🦦", description: "Плывет рядом и бросает монетки каждые 12 сек.", price: 100, emoji: "🦦", detail: "Лови ништяк! 🌟" },
+  { id: "royal_duck", name: "Утка-Бро 👑🦆", description: "Плывет рядом и спавнит вам щиты каждые 20 сек.", price: 150, emoji: "👑🦆", detail: "Держи щит, бро! 🛡️" },
+  { id: "cyber_bot", name: "Дрон Кибер-Бот 🤖", description: "Каждые 15 сек аннигилирует ближайшее бревно лазером.", price: 200, emoji: "🤖", detail: "Мишень уничтожена! ⚡" },
+];
+
 export default function SupGame({ onClose }: { onClose?: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -278,6 +309,39 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
   const [gameLevel, setGameLevel] = useState(1);
   const [levelUpPopup, setLevelUpPopup] = useState<number | null>(null);
   const [isLiveLeaderboardOpen, setIsLiveLeaderboardOpen] = useState(true);
+
+  // --- RPG PROGRESSION & ACTIVE/PASSIVE MECHANICS STATES ---
+  const [playerLevel, setPlayerLevel] = useState(() => {
+    return parseInt(localStorage.getItem("sup_player_level") || "1", 10);
+  });
+  const [playerXp, setPlayerXp] = useState(() => {
+    return parseInt(localStorage.getItem("sup_player_xp") || "0", 10);
+  });
+  const [lastXpEarned, setLastXpEarned] = useState<number | null>(null);
+  const [levelUpOccurred, setLevelUpOccurred] = useState(false);
+
+  const [unlockedPerkIds, setUnlockedPerkIds] = useState<string[]>(() => {
+    return JSON.parse(localStorage.getItem("sup_unlocked_perks") || "[]");
+  });
+  const [equippedPerkId, setEquippedPerkId] = useState(() => {
+    return localStorage.getItem("sup_equipped_perk") || "none";
+  });
+
+  const [unlockedCompanionIds, setUnlockedCompanionIds] = useState<string[]>(() => {
+    return JSON.parse(localStorage.getItem("sup_unlocked_companions") || "[]");
+  });
+  const [equippedCompanionId, setEquippedCompanionId] = useState(() => {
+    return localStorage.getItem("sup_equipped_companion") || "none";
+  });
+
+  const [shopTab, setShopTab] = useState<"skins" | "perks" | "companions">("skins");
+
+  // Gameplay Live Cooldowns (for HUD rendering)
+  const [dashCd, setDashCd] = useState(0);
+  const [strikeCd, setStrikeCd] = useState(0);
+  const [jumpTimeState, setJumpTimeState] = useState(0);
+  const [activeWeatherEvent, setActiveWeatherEvent] = useState<string | null>(null);
+  const [eventTimeState, setEventTimeState] = useState(0);
 
   // Multiplayer WebSocket States
   const [gameMode, setGameMode] = useState<"solo" | "multiplayer">("solo");
@@ -501,6 +565,25 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
     isLevelUpPaused: false,
     levelUpPauseTimer: 0,
     shieldCount: 0,
+    playerZ: 0,
+    jumpTimeLeft: 0,
+    dashCooldown: 0,
+    strikeCooldown: 0,
+    activeEvent: null as string | null,
+    eventTimeLeft: 0,
+    eventSpawnTimer: 12.0,
+    companionObj: null as {
+      x: number;
+      y: number;
+      emoji: string;
+      boardColor: string;
+      lastActionTime: number;
+      actionText: string;
+      actionTextTime: number;
+    } | null,
+    laserLine: null as { startX: number; startY: number; endX: number; endY: number; duration: number } | null,
+    shockwaveEffect: null as { x: number; y: number; r: number; maxR: number; duration: number } | null,
+    dashEffect: null as { x: number; y: number; duration: number } | null,
   });
 
   // Synchronized shield update function
@@ -550,6 +633,36 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
       setHighScore(newScore);
       localStorage.setItem("sup_high_score", newScore.toString());
     }
+  };
+
+  // RPG XP and level progression helper
+  const processXpProgression = (meters: number) => {
+    if (meters <= 0) return;
+    const baseNewXp = Math.floor(meters * 1.25) + 15;
+    setLastXpEarned(baseNewXp);
+    setLevelUpOccurred(false);
+
+    setPlayerXp((prevXp) => {
+      let nextXp = prevXp + baseNewXp;
+      let nextLvl = playerLevel;
+      
+      let xpRequired = nextLvl * 250;
+      let leveledUp = false;
+      while (nextXp >= xpRequired) {
+        nextXp -= xpRequired;
+        nextLvl += 1;
+        xpRequired = nextLvl * 250;
+        leveledUp = true;
+      }
+
+      if (leveledUp) {
+        setPlayerLevel(nextLvl);
+        localStorage.setItem("sup_player_level", nextLvl.toString());
+        setLevelUpOccurred(true);
+      }
+      localStorage.setItem("sup_player_xp", nextXp.toString());
+      return nextXp;
+    });
   };
 
   // Buy Skin helper
@@ -634,6 +747,9 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    const hasShieldStart = equippedPerkId === "shield_start";
+    const initialShieldCount = hasShieldStart ? 1 : 0;
+
     stateRef.current = {
       playerX: canvas.width / 2,
       playerY: canvas.height - 120,
@@ -658,12 +774,31 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
       level: 1,
       isLevelUpPaused: false,
       levelUpPauseTimer: 0,
-      shieldCount: 0,
+      shieldCount: initialShieldCount,
+      playerZ: 0,
+      jumpTimeLeft: 0,
+      dashCooldown: 0,
+      strikeCooldown: 0,
+      activeEvent: null as string | null,
+      eventTimeLeft: 0,
+      eventSpawnTimer: 12.0, // trigger first weather event at 12s
+      companionObj: null as {
+        x: number;
+        y: number;
+        emoji: string;
+        boardColor: string;
+        lastActionTime: number;
+        actionText: string;
+        actionTextTime: number;
+      } | null,
+      laserLine: null as { startX: number; startY: number; endX: number; endY: number; duration: number } | null,
+      shockwaveEffect: null as { x: number; y: number; r: number; maxR: number; duration: number } | null,
+      dashEffect: null as { x: number; y: number; duration: number } | null,
     };
 
     setLives(3);
     setScore(0);
-    changeShieldCount(0);
+    changeShieldCount(initialShieldCount);
     setIsPlaying(true);
     setActiveScare(null);
     setIsGlitchedReact(false);
@@ -672,6 +807,56 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
     setShowRules(false);
     setShowShop(false);
     setShowLeaderboard(false);
+    setDashCd(0);
+    setStrikeCd(0);
+    setJumpTimeState(0);
+    setActiveWeatherEvent(null);
+    setEventTimeState(0);
+    setLevelUpOccurred(false);
+  };
+
+  // Trigger Jump manually (for mobile buttons and keystroke fallback)
+  const triggerJump = () => {
+    const state = stateRef.current;
+    if (state.jumpTimeLeft <= 0 && isPlaying && !state.isLevelUpPaused) {
+      state.jumpTimeLeft = 0.8;
+      audio.playSplash();
+    }
+  };
+
+  // Trigger Dash manually (for mobile buttons)
+  const triggerDash = () => {
+    const state = stateRef.current;
+    if (state.dashCooldown <= 0 && isPlaying && !state.isLevelUpPaused) {
+      state.dashCooldown = 3.0;
+      const dashDist = 80;
+      const dirSign = Math.random() > 0.5 ? 1 : -1;
+      state.dashEffect = { x: state.playerX, y: state.playerY, duration: 0.3 };
+      state.targetPlayerX = Math.min((canvasRef.current?.width || 400) - 30, Math.max(30, state.playerX + dashDist * dirSign));
+      audio.playSplash();
+    }
+  };
+
+  // Trigger Oar Strike manually (for mobile buttons)
+  const triggerStrike = () => {
+    const state = stateRef.current;
+    if (state.strikeCooldown <= 0 && isPlaying && !state.isLevelUpPaused) {
+      state.strikeCooldown = 8.0;
+      audio.playHit();
+      const shockRadius = 130;
+      state.shockwaveEffect = { x: state.playerX, y: state.playerY, r: 10, maxR: shockRadius, duration: 0.4 };
+      state.objects = state.objects.filter((obj) => {
+        if (obj.type === "log" || obj.type === "duck" || obj.type === "ban") {
+          const dx = (obj.x + obj.width / 2) - state.playerX;
+          const dy = (obj.y + obj.height / 2) - state.playerY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < shockRadius) {
+            return false;
+          }
+        }
+        return true;
+      });
+    }
   };
 
   // Paddle manually (Left/Right actions)
@@ -849,7 +1034,10 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
       // Spawning obstacles & bonuses
       const now = Date.now();
       const baseSpawnInterval = Math.max(800, 1800 - (currentMeters * 3.5));
-      const spawnInterval = state.isSpeedBoosted ? 550 : baseSpawnInterval;
+      let spawnInterval = state.isSpeedBoosted ? 550 : baseSpawnInterval;
+      if (state.activeEvent === "beaver_frenzy") {
+        spawnInterval = Math.max(380, spawnInterval * 0.45);
+      }
       if (!state.isLevelUpPaused && now - state.lastSpawnTime > spawnInterval) {
         state.lastSpawnTime = now;
         const types: GameObject["type"][] = ["log", "duck", "ban", "coin", "shield", "coffee"];
@@ -902,6 +1090,192 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         if (state.boostTimeLeft <= 0) {
           state.isSpeedBoosted = false;
         }
+      }
+
+      // --- RPG CUSTOM SKILLS & COOLDOWNS ---
+      if (state.dashCooldown > 0) {
+        state.dashCooldown = Math.max(0, state.dashCooldown - delta);
+      }
+      if (state.strikeCooldown > 0) {
+        state.strikeCooldown = Math.max(0, state.strikeCooldown - delta);
+      }
+
+      // 1. JUMP (Spacebar) Trigger
+      if (keysRef.current["Space"] && state.jumpTimeLeft <= 0 && !state.isLevelUpPaused) {
+        state.jumpTimeLeft = 0.8; // 0.8 seconds air time
+        audio.playSplash(); // play jumping splash sound
+      }
+
+      // Jump Physics update
+      if (state.jumpTimeLeft > 0) {
+        state.jumpTimeLeft -= delta;
+        state.playerZ = Math.sin((state.jumpTimeLeft / 0.8) * Math.PI) * 25; // max height of 25px
+        if (state.jumpTimeLeft <= 0) {
+          state.playerZ = 0;
+        }
+      }
+
+      // 2. DASH (Q Key) Trigger
+      if (keysRef.current["KeyQ"] && state.dashCooldown <= 0 && !state.isLevelUpPaused) {
+        state.dashCooldown = 3.0; // 3 seconds CD
+        const dashDist = 80;
+        // Dash direction based on where the player is heading, or default to left/right
+        const isHeadingLeft = keysRef.current["ArrowLeft"] || keysRef.current["KeyA"];
+        const dirSign = isHeadingLeft ? -1 : 1;
+        state.dashEffect = { x: state.playerX, y: state.playerY, duration: 0.3 };
+        state.targetPlayerX = Math.min(canvas.width - 30, Math.max(30, state.playerX + dashDist * dirSign));
+        audio.playSplash();
+      }
+
+      // 3. OAR STRIKE (E Key) Trigger
+      if (keysRef.current["KeyE"] && state.strikeCooldown <= 0 && !state.isLevelUpPaused) {
+        state.strikeCooldown = 8.0; // 8 seconds CD
+        audio.playHit();
+        const shockRadius = 130;
+        state.shockwaveEffect = { x: state.playerX, y: state.playerY, r: 10, maxR: shockRadius, duration: 0.4 };
+        // Clear obstacles within shockwave range
+        state.objects = state.objects.filter((obj) => {
+          if (obj.type === "log" || obj.type === "duck" || obj.type === "ban") {
+            const dx = (obj.x + obj.width / 2) - state.playerX;
+            const dy = (obj.y + obj.height / 2) - state.playerY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < shockRadius) {
+              return false; // destroy
+            }
+          }
+          return true;
+        });
+      }
+
+      // --- RANDOM RIVER MODIFIER WEATHER EVENTS ---
+      state.eventSpawnTimer -= delta;
+      if (state.eventSpawnTimer <= 0) {
+        if (!state.activeEvent) {
+          const possibleEvents = ["beaver_frenzy", "thunderstorm", "whirlpool"];
+          state.activeEvent = possibleEvents[Math.floor(Math.random() * possibleEvents.length)];
+          state.eventTimeLeft = 10.0; // last 10s
+          state.eventSpawnTimer = 25.0; // Next weather alert in 25s
+          audio.playShield();
+        }
+      }
+
+      if (state.activeEvent) {
+        state.eventTimeLeft -= delta;
+        if (state.eventTimeLeft <= 0) {
+          state.activeEvent = null;
+        } else {
+          // Storm event logic
+          if (state.activeEvent === "thunderstorm") {
+            const windForce = Math.sin(time * 0.003) * 75 * delta;
+            state.targetPlayerX = Math.min(canvas.width - 30, Math.max(30, state.targetPlayerX + windForce));
+          } else if (state.activeEvent === "whirlpool") {
+            // Whirlpool pull logic
+            const centerPull = (canvas.width / 2 - state.playerX) * 0.45 * delta;
+            state.targetPlayerX += centerPull;
+          }
+        }
+      }
+
+      // --- COMPANION BOT SYSTEM ---
+      if (equippedCompanionId !== "none" && !state.isLevelUpPaused) {
+        if (!state.companionObj) {
+          state.companionObj = {
+            x: state.playerX - 52,
+            y: state.playerY,
+            emoji: equippedCompanionId === "capybara_bro" ? "🦦" : equippedCompanionId === "royal_duck" ? "👑🦆" : "🤖",
+            boardColor: equippedCompanionId === "capybara_bro" ? "#d97706" : equippedCompanionId === "royal_duck" ? "#eab308" : "#06b6d4",
+            lastActionTime: Date.now(),
+            actionText: "",
+            actionTextTime: 0
+          };
+        }
+
+        const comp = state.companionObj;
+        // Smoothly follow behind / to the side of the surfboard
+        const compTargetX = state.playerX - 52;
+        comp.x += (compTargetX - comp.x) * 0.15;
+        comp.y += (state.playerY - comp.y) * 0.15;
+
+        // Decrease active text display bubble timer
+        if (comp.actionTextTime > 0) {
+          comp.actionTextTime -= delta;
+        }
+
+        const compNow = Date.now();
+        const actionCd = equippedCompanionId === "capybara_bro" ? 12000 : equippedCompanionId === "royal_duck" ? 20000 : 15000;
+        if (compNow - comp.lastActionTime > actionCd) {
+          comp.lastActionTime = compNow;
+          
+          if (equippedCompanionId === "capybara_bro") {
+            state.objects.push({
+              id: state.nextObjectId++,
+              x: comp.x,
+              y: comp.y - 15,
+              width: 25,
+              height: 25,
+              type: "coin",
+              speedY: -2.0,
+              angle: 0,
+              pulse: 0
+            });
+            comp.actionText = "Лови монетку! 🌟";
+            comp.actionTextTime = 2.0;
+            audio.playCoin();
+          } else if (equippedCompanionId === "royal_duck") {
+            state.objects.push({
+              id: state.nextObjectId++,
+              x: comp.x,
+              y: comp.y - 15,
+              width: 25,
+              height: 25,
+              type: "shield",
+              speedY: -1.8,
+              angle: 0,
+              pulse: 0
+            });
+            comp.actionText = "Держи щит, бро! 🛡️";
+            comp.actionTextTime = 2.0;
+            audio.playShield();
+          } else if (equippedCompanionId === "cyber_bot") {
+            // Shoots laser and destroys the closest oncoming obstacle
+            let closestObs: any = null;
+            let minDist = 9999;
+            state.objects.forEach((obj) => {
+              if (obj.type === "log" || obj.type === "duck" || obj.type === "ban") {
+                const dy = state.playerY - obj.y;
+                if (dy > 30 && dy < minDist) {
+                  minDist = dy;
+                  closestObs = obj;
+                }
+              }
+            });
+            if (closestObs) {
+              const oIdx = state.objects.indexOf(closestObs);
+              if (oIdx > -1) {
+                state.objects.splice(oIdx, 1);
+                comp.actionText = "Мишень устранена! ⚡";
+                comp.actionTextTime = 2.0;
+                audio.playHit();
+                // Spawn laser effect lines
+                state.laserLine = {
+                  startX: comp.x,
+                  startY: comp.y,
+                  endX: closestObs.x + closestObs.width / 2,
+                  endY: closestObs.y + closestObs.height / 2,
+                  duration: 0.25
+                };
+              }
+            }
+          }
+        }
+      }
+
+      // Throttled React state updater (prevents excessive re-renders)
+      if (state.frameCount % 4 === 0) {
+        setDashCd(Math.ceil(state.dashCooldown));
+        setStrikeCd(Math.ceil(state.strikeCooldown));
+        setActiveWeatherEvent(state.activeEvent);
+        setEventTimeState(Math.ceil(state.eventTimeLeft));
       }
 
       // Smooth keyboard movement controls (snappier speed! increases with level)
@@ -1604,14 +1978,20 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         const oTop = obj.y;
         const oBottom = obj.y + obj.height;
 
-        const isColliding = !state.isLevelUpPaused && pLeft < oRight && pRight > oLeft && pTop < oBottom && pBottom > oTop;
+        let isColliding = !state.isLevelUpPaused && pLeft < oRight && pRight > oLeft && pTop < oBottom && pBottom > oTop;
+
+        // JUMP OVER OBSTACLES: Skip logs and bans if player is in the air
+        if (isColliding && state.playerZ > 0 && (obj.type === "log" || obj.type === "ban")) {
+          isColliding = false;
+        }
 
         if (isColliding) {
           // Handle collision types
           if (obj.type === "coin") {
             audio.playCoin();
+            const coinAmount = equippedPerkId === "double_gold" ? 2 : 1;
             setCoins((c) => {
-              const updated = c + 1;
+              const updated = c + coinAmount;
               localStorage.setItem("sup_coins", updated.toString());
               return updated;
             });
@@ -1621,7 +2001,8 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
           } else if (obj.type === "coffee") {
             audio.playShield();
             state.isSpeedBoosted = true;
-            state.boostTimeLeft = 6.0; // 6 seconds nitro speed boost
+            const boostDuration = equippedPerkId === "coffee_gourmet" ? 9.0 : 6.0;
+            state.boostTimeLeft = boostDuration;
           } else {
             // Collision with hazards (log, ban, duck)
             if (state.shieldCount > 0) {
@@ -1638,6 +2019,7 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                   setIsPlaying(false);
                   updateHighScore(currentMeters);
                   updateLeaderboard(currentMeters, currentSkin);
+                  processXpProgression(currentMeters); // Process RPG Levels & XP
 
                   if (gameMode === "multiplayer" && wsRef.current?.readyState === WebSocket.OPEN) {
                     wsRef.current.send(JSON.stringify({
@@ -1655,7 +2037,8 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
               // Apply control glitch if hitting duck/glitchy objects
               if (obj.type === "duck") {
                 state.isGlitched = true;
-                state.glitchTimeLeft = 3.5;
+                const glitchDuration = equippedPerkId === "heavy_deck" ? 1.75 : 3.5;
+                state.glitchTimeLeft = glitchDuration;
                 setIsGlitchedReact(true);
               }
             }
@@ -1753,12 +2136,155 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
         });
       }
 
+      // --- DRAW RPG SPECIAL EFFECTS & COMPANIONS ---
+      // 3.6 Draw Whirlpool Event Visual
+      if (state.activeEvent === "whirlpool") {
+        ctx.save();
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.rotate(time * 0.004);
+        ctx.strokeStyle = "rgba(6, 182, 212, 0.22)";
+        ctx.lineWidth = 3;
+        ctx.shadowColor = "#06b6d4";
+        ctx.shadowBlur = 10;
+        for (let r = 20; r < 140; r += 25) {
+          ctx.beginPath();
+          ctx.arc(0, 0, r, 0, Math.PI * 1.5);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // 3.7 Draw Laser beams
+      if (state.laserLine && state.laserLine.duration > 0) {
+        state.laserLine.duration -= delta;
+        ctx.save();
+        ctx.strokeStyle = "#22d3ee";
+        ctx.lineWidth = 3;
+        ctx.shadowColor = "#06b6d4";
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.moveTo(state.laserLine.startX, state.laserLine.startY);
+        ctx.lineTo(state.laserLine.endX, state.laserLine.endY);
+        ctx.stroke();
+        ctx.restore();
+        if (state.laserLine.duration <= 0) {
+          state.laserLine = null;
+        }
+      }
+
+      // 3.8 Draw Shockwaves
+      if (state.shockwaveEffect && state.shockwaveEffect.duration > 0) {
+        state.shockwaveEffect.duration -= delta;
+        state.shockwaveEffect.r += (state.shockwaveEffect.maxR - state.shockwaveEffect.r) * 0.22;
+        ctx.save();
+        ctx.strokeStyle = "rgba(168, 85, 247, " + (state.shockwaveEffect.duration / 0.4) + ")";
+        ctx.lineWidth = 4;
+        ctx.shadowColor = "#c084fc";
+        ctx.shadowBlur = 15;
+        ctx.beginPath();
+        ctx.arc(state.shockwaveEffect.x, state.shockwaveEffect.y, state.shockwaveEffect.r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+        if (state.shockwaveEffect.duration <= 0) {
+          state.shockwaveEffect = null;
+        }
+      }
+
+      // 3.9 Draw Dash Trail Ghost
+      if (state.dashEffect && state.dashEffect.duration > 0) {
+        state.dashEffect.duration -= delta;
+        ctx.save();
+        ctx.globalAlpha = (state.dashEffect.duration / 0.3) * 0.45;
+        ctx.font = "28px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(currentSkin.emoji, state.dashEffect.x, state.dashEffect.y - 10);
+        ctx.restore();
+        if (state.dashEffect.duration <= 0) {
+          state.dashEffect = null;
+        }
+      }
+
+      // 3.95 Draw Companion Bot on its own surfboard
+      if (equippedCompanionId !== "none" && state.companionObj) {
+        const comp = state.companionObj;
+        ctx.save();
+        ctx.translate(comp.x, comp.y);
+
+        // Draw mini board
+        ctx.fillStyle = comp.boardColor;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 16, 28, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.7)";
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        // mini grip mat
+        ctx.fillStyle = "rgba(255,255,255,0.2)";
+        ctx.beginPath();
+        ctx.ellipse(0, 2, 12, 18, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Bounce companion slightly
+        const compBounce = Math.sin(time * 0.006) * 1.5;
+        ctx.translate(0, compBounce);
+
+        // emoji
+        ctx.font = "18px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(comp.emoji, 0, -3);
+
+        ctx.restore();
+
+        // Draw chat bubble
+        if (comp.actionText && comp.actionTextTime > 0) {
+          ctx.save();
+          ctx.font = "bold 9px monospace";
+          const txtW = ctx.measureText(comp.actionText).width;
+          const bx = comp.x;
+          const by = comp.y - 36;
+
+          // round rect
+          ctx.fillStyle = "rgba(10, 5, 20, 0.9)";
+          ctx.strokeStyle = "#38bdf8";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.roundRect(bx - txtW / 2 - 5, by - 6, txtW + 10, 13, 4);
+          ctx.fill();
+          ctx.stroke();
+
+          // text
+          ctx.fillStyle = "#e0f2fe";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(comp.actionText, bx, by + 1);
+          ctx.restore();
+        }
+      }
+
       // 4. Draw Player on SUP Board
+      if (state.playerZ > 0) {
+        ctx.save();
+        ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+        ctx.beginPath();
+        const shadowScale = Math.max(0.65, 1 - state.playerZ / 80);
+        ctx.ellipse(state.playerX, state.playerY, (state.playerWidth / 2) * shadowScale, (state.playerHeight / 2) * shadowScale, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
       ctx.save();
-      ctx.translate(state.playerX, state.playerY);
+      ctx.translate(state.playerX, state.playerY - (state.playerZ || 0));
+
+      // Scale board slightly when jumping to enhance depth perspective
+      if (state.playerZ > 0) {
+        const jumpScale = 1 + (state.playerZ / 120);
+        ctx.scale(jumpScale, jumpScale);
+      }
 
       // Subtle breathing floating board animation
-      const floatOffset = Math.sin(time * 0.005) * 2;
+      const floatOffset = state.playerZ > 0 ? 0 : Math.sin(time * 0.005) * 2;
       ctx.translate(0, floatOffset);
 
       // Draw a highly polished, realistic 3D fiberglass SUP board (pointed racing board shape!)
@@ -2920,6 +3446,78 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
             </div>
           )}
 
+          {/* Active Weather Event Banner */}
+          {isPlaying && activeWeatherEvent && (
+            <div className="absolute top-16 left-1/2 transform -translate-x-1/2 bg-[#081f2d]/95 border-2 border-cyan-400 text-cyan-200 font-mono font-black text-[10px] md:text-xs py-1.5 px-3.5 rounded-xl shadow-[0_0_20px_rgba(34,211,238,0.45)] animate-pulse flex flex-col items-center gap-0.5 z-15 select-none pointer-events-none text-center">
+              <span className="text-[9px] text-cyan-400 tracking-widest uppercase font-bold">⚠️ Аномалия реки:</span>
+              <span className="uppercase text-[11px]">
+                {activeWeatherEvent === "beaver_frenzy" && "💥 НАШЕСТВИЕ БОБРОВ! Лавина брёвен!"}
+                {activeWeatherEvent === "thunderstorm" && "⛈️ ГРОЗА! Штормовой ветер!"}
+                {activeWeatherEvent === "whirlpool" && "🌀 ВОДОВОРОТ! Тяга в центр реки!"}
+              </span>
+              <span className="text-[8px] opacity-75 font-semibold">Осталось: {eventTimeState} сек</span>
+            </div>
+          )}
+
+          {/* Floating RPG Active Skills HUD Panel */}
+          {isPlaying && (
+            <div className="absolute bottom-5 left-1/2 transform -translate-x-1/2 flex items-center gap-3.5 z-15 bg-[#090514]/80 border border-[#2b174a]/65 px-4 py-2.5 rounded-2xl backdrop-blur-md shadow-2xl select-none" id="rpg_active_skills_hud">
+              {/* JUMP SKILL BUTTON */}
+              <button
+                onClick={triggerJump}
+                type="button"
+                className="relative flex flex-col items-center justify-center w-12 h-12 rounded-xl bg-[#1d1136] hover:bg-[#2e1c54] border border-[#4d2a8a] active:scale-95 transition-all text-white cursor-pointer shadow-md group"
+                id="hud_btn_jump"
+              >
+                <span className="text-lg">🦘</span>
+                <span className="text-[8px] font-mono font-bold text-purple-300">Space</span>
+                <span className="absolute -top-1.5 -right-1.5 bg-[#4c1d95] text-[7px] text-white font-extrabold px-1 rounded border border-[#6d28d9]">Прыжок</span>
+              </button>
+
+              {/* DASH SKILL BUTTON */}
+              <button
+                onClick={triggerDash}
+                disabled={dashCd > 0}
+                type="button"
+                className={`relative flex flex-col items-center justify-center w-12 h-12 rounded-xl border transition-all text-white cursor-pointer shadow-md group ${
+                  dashCd > 0
+                    ? "bg-[#11081f] border-red-950/60 opacity-60 cursor-not-allowed"
+                    : "bg-[#1d1136] hover:bg-[#2e1c54] border-[#4d2a8a] active:scale-95"
+                }`}
+                id="hud_btn_dash"
+              >
+                {dashCd > 0 ? (
+                  <span className="text-xs font-black font-mono text-red-400">{dashCd}s</span>
+                ) : (
+                  <span className="text-lg">⚡</span>
+                )}
+                <span className="text-[8px] font-mono font-bold text-purple-300">Key Q</span>
+                <span className="absolute -top-1.5 -right-1.5 bg-[#9d174d] text-[7px] text-white font-extrabold px-1 rounded border border-[#be185d]">Рывок</span>
+              </button>
+
+              {/* OAR SHOCKWAVE SKILL BUTTON */}
+              <button
+                onClick={triggerStrike}
+                disabled={strikeCd > 0}
+                type="button"
+                className={`relative flex flex-col items-center justify-center w-12 h-12 rounded-xl border transition-all text-white cursor-pointer shadow-md group ${
+                  strikeCd > 0
+                    ? "bg-[#11081f] border-red-950/60 opacity-60 cursor-not-allowed"
+                    : "bg-[#1d1136] hover:bg-[#2e1c54] border-[#4d2a8a] active:scale-95"
+                }`}
+                id="hud_btn_strike"
+              >
+                {strikeCd > 0 ? (
+                  <span className="text-xs font-black font-mono text-red-400">{strikeCd}s</span>
+                ) : (
+                  <span className="text-lg">🌀</span>
+                )}
+                <span className="text-[8px] font-mono font-bold text-purple-300">Key E</span>
+                <span className="absolute -top-1.5 -right-1.5 bg-[#0369a1] text-[7px] text-white font-extrabold px-1 rounded border border-[#0369a1]">Волна</span>
+              </button>
+            </div>
+          )}
+
           {/* START/GAMEOVER INTERACTIVE SCREEN OVERLAY */}
           {!isPlaying && (
             <div className="absolute inset-0 bg-black/85 backdrop-blur-sm overflow-y-auto p-4 md:p-6 text-center z-20 animate-fade-in scrollbar-thin" id="arcade_intro_screen">
@@ -3001,6 +3599,43 @@ export default function SupGame({ onClose }: { onClose?: () => void }) {
                             ));
                           })()}
                         </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* RPG Leveling progress on game over */}
+                  <div className="bg-[#0e071c] border border-[#2b1b4d] rounded-xl p-3 max-w-xs mx-auto text-left space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-purple-300 font-extrabold uppercase font-mono tracking-widest">Профиль сёрфера</span>
+                      <span className="text-[10px] bg-[#915eff]/20 border border-[#915eff]/50 text-[#bf94ff] px-2 py-0.5 rounded font-bold font-mono">
+                        УРОВЕНЬ {playerLevel}
+                      </span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-gray-400 font-mono">
+                        <span>Заработано опыта:</span>
+                        <span className="text-emerald-400 font-bold">+{lastXpEarned} XP</span>
+                      </div>
+
+                      {/* XP Progress Bar */}
+                      <div className="w-full bg-purple-950/40 border border-purple-900/50 h-3 rounded-full overflow-hidden relative shadow-inner">
+                        <div 
+                          className="bg-gradient-to-r from-[#915eff] to-[#bf94ff] h-full rounded-full transition-all duration-1000"
+                          style={{ width: `${Math.min(100, (playerXp / (playerLevel * 250)) * 100)}%` }}
+                        />
+                        <span className="absolute inset-0 flex items-center justify-center text-[8px] font-black font-mono text-white tracking-widest uppercase">
+                          {playerXp} / {playerLevel * 250} XP
+                        </span>
+                      </div>
+                    </div>
+
+                    {levelUpOccurred && (
+                      <div className="bg-amber-950/50 border border-amber-500/30 rounded-lg p-2 text-center animate-pulse">
+                        <p className="text-[10px] text-amber-400 font-extrabold uppercase font-mono tracking-wider flex items-center justify-center gap-1.5">
+                          <span>🎉 УРОВЕНЬ ПОВЫШЕН! 🎉</span>
+                        </p>
+                        <p className="text-[9px] text-gray-300 font-medium">Вы открыли новые перки и награды в лобби!</p>
                       </div>
                     )}
                   </div>
